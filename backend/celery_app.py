@@ -1,8 +1,11 @@
 from celery import Celery
-try:
-    from backend.config import settings
-except ImportError:
-    from config import settings
+import sys
+
+# Debug: Print sys.path
+print(f"DEBUG Celery: sys.path: {sys.path}")
+
+# Use absolute import for backend package structure
+from backend.config import settings
 
 celery_app = Celery(
     "worker",
