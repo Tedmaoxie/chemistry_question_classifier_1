@@ -1,3 +1,13 @@
+---
+title: Chemistry Question Classifier
+emoji: 🧪
+colorFrom: indigo
+colorTo: blue
+sdk: docker
+pinned: false
+app_port: 7860
+---
+
 # 化学题目智能分析系统 (Chemistry Question Classifier)
 
 **AI赋能高中化学教学系列 by 实验中学**
