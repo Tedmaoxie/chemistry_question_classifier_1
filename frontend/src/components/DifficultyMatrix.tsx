@@ -157,22 +157,37 @@ export const DifficultyMatrix: React.FC<DifficultyMatrixProps> = ({ questions, c
                 ))}
                 
                 {/* X-Axis Labels (Question IDs) */}
-                 <Box sx={{ display: 'flex', ml: `${BLOCK_SIZE + 16}px`, gap: `${GAP_SIZE}px` }}>
-                    {questions.map((q, index) => (
-                         <Typography 
-                            key={q.id} 
-                            variant="caption" 
-                            sx={{ 
-                                width: BLOCK_SIZE, 
-                                textAlign: 'center', 
-                                fontSize: '0.6rem', 
-                                color: 'text.disabled',
-                                visibility: index % 5 === 0 ? 'visible' : 'hidden' 
-                            }}
-                        >
-                            {q.id}
-                        </Typography>
-                    ))}
+                <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 'fit-content', mt: 1 }}>
+                    {/* Spacer matching the model label */}
+                    <Box sx={{ width: BLOCK_SIZE, mr: 2, flexShrink: 0 }} />
+
+                    <Box sx={{ display: 'flex', gap: `${GAP_SIZE}px` }}>
+                        {questions.map((q, index) => (
+                            <Box 
+                                key={q.id}
+                                sx={{ 
+                                    width: BLOCK_SIZE,
+                                    minWidth: BLOCK_SIZE,
+                                    display: 'flex',
+                                    justifyContent: 'center',
+                                    visibility: index % 5 === 0 ? 'visible' : 'hidden',
+                                    overflow: 'visible'
+                                }}
+                            >
+                                <Typography 
+                                    variant="caption" 
+                                    sx={{ 
+                                        fontSize: '0.6rem', 
+                                        color: 'text.disabled',
+                                        whiteSpace: 'nowrap',
+                                        textAlign: 'center'
+                                    }}
+                                >
+                                    {q.id}
+                                </Typography>
+                            </Box>
+                        ))}
+                    </Box>
                 </Box>
             </Box>
         </Paper>
