@@ -48,7 +48,9 @@ const ModelResultAccordion = ({
     id,
     highlighted,
     onRetry,
-    questionId
+    questionId,
+    expanded: expandedProp,
+    onExpandedChange
 }: { 
     modelLabel: string, 
     displayName: string, 
@@ -57,9 +59,14 @@ const ModelResultAccordion = ({
     id?: string,
     highlighted?: boolean,
     onRetry?: () => void,
-    questionId?: string
+    questionId?: string,
+    expanded?: boolean,
+    onExpandedChange?: (isExpanded: boolean) => void
 }) => {
-    const [expanded, setExpanded] = useState(false);
+    const [localExpanded, setLocalExpanded] = useState(false);
+    const isControlled = expandedProp !== undefined;
+    const expanded = isControlled ? expandedProp : localExpanded;
+
     const prevStatus = useRef(statusInfo?.status);
     const reportRef = useRef<HTMLDivElement>(null);
     const [downloading, setDownloading] = useState(false);
@@ -69,21 +76,33 @@ const ModelResultAccordion = ({
         // 状态从未完成变为处理中或完成时，自动展开
         if (status !== prevStatus.current) {
             if ((status === 'processing' || status === 'completed') && !expanded) {
-                 setExpanded(true);
+                 if (isControlled) {
+                     onExpandedChange?.(true);
+                 } else {
+                     setLocalExpanded(true);
+                 }
             }
             prevStatus.current = status;
         }
-    }, [statusInfo?.status, expanded]);
+    }, [statusInfo?.status, expanded, isControlled, onExpandedChange]);
 
     // 如果被高亮，自动展开
     useEffect(() => {
         if (highlighted && !expanded) {
-            setExpanded(true);
+            if (isControlled) {
+                onExpandedChange?.(true);
+            } else {
+                setLocalExpanded(true);
+            }
         }
-    }, [highlighted]);
+    }, [highlighted, expanded, isControlled, onExpandedChange]);
 
     const handleChange = (_event: React.SyntheticEvent, isExpanded: boolean) => {
-        setExpanded(isExpanded);
+        if (isControlled) {
+            onExpandedChange?.(isExpanded);
+        } else {
+            setLocalExpanded(isExpanded);
+        }
     };
 
     const isCompletedStatus = statusInfo?.status === 'completed';
@@ -322,6 +341,37 @@ function App() {
   const [analysisMode, setAnalysisMode] = useState('sub_question'); // 分析模式：小题/整题
   const [taskIds, setTaskIds] = useState<string[]>([]); // 当前任务ID列表
   const [highlightedId, setHighlightedId] = useState<string | null>(null); // 高亮显示的分析结果ID
+  const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({}); // 全局折叠状态管理
+  const [isExporting, setIsExporting] = useState(false); // PDF导出状态
+  const questionListRef = useRef<HTMLDivElement>(null); // 题目列表容器引用
+
+  // --- 交互功能：全局折叠/展开 ---
+  const handleAccordionChange = (id: string, isExpanded: boolean) => {
+      setExpandedAccordions(prev => ({ ...prev, [id]: isExpanded }));
+  };
+
+  const getAllAccordionIds = () => {
+      return questions.flatMap(q => 
+          configs.map(c => `analysis-${q.id}-${c.label}`)
+      );
+  };
+
+  const isAllExpanded = () => {
+      const ids = getAllAccordionIds();
+      return ids.length > 0 && ids.every(id => expandedAccordions[id]);
+  };
+
+  const handleGlobalExpandCollapse = () => {
+      const ids = getAllAccordionIds();
+      const shouldExpand = !isAllExpanded();
+      
+      const newExpandedState = ids.reduce((acc, id) => {
+          acc[id] = shouldExpand;
+          return acc;
+      }, {} as Record<string, boolean>);
+      
+      setExpandedAccordions(prev => ({ ...prev, ...newExpandedState }));
+  };
 
   // --- 持久化存储 ---
   useEffect(() => {
@@ -430,6 +480,7 @@ function App() {
           const selectedFile = event.target.files[0];
           setFile(selectedFile);
           setQuestions([]); // 清空旧的题目列表
+          setExpandedAccordions({}); // 清空展开状态
           setError(null);
           setUploadProgress(0);
           
@@ -448,6 +499,7 @@ function App() {
           const selectedFile = event.dataTransfer.files[0];
           setFile(selectedFile);
           setQuestions([]);
+          setExpandedAccordions({});
           setError(null);
           setUploadProgress(0);
       }
@@ -470,6 +522,7 @@ function App() {
       setUploadProgress(0);
       setError(null);
       setQuestions([]); // 再次确保清空
+      setExpandedAccordions({});
       
       const formData = new FormData();
       formData.append('file', fileToUpload);
@@ -843,8 +896,7 @@ function App() {
       return modelKey;
   };
 
-  const [showSummaryPrint, setShowSummaryPrint] = useState(false);
-  const summaryPrintRef = useRef<HTMLDivElement>(null);
+
 
   // --- 导出 CSV ---
   const exportToCSV = () => {
@@ -974,52 +1026,81 @@ function App() {
   };
 
   const handleExportSummaryPDF = async () => {
-      setShowSummaryPrint(true);
-      // Give React time to render the hidden view
-      setTimeout(async () => {
-          if (!summaryPrintRef.current) {
-              setShowSummaryPrint(false);
-              return;
-          }
+      if (questions.length === 0) return;
+      setIsExporting(true);
+
+      try {
+          // 1. 展开所有题目
+          const ids = getAllAccordionIds();
+          const allExpanded = ids.reduce((acc, id) => ({ ...acc, [id]: true }), {} as Record<string, boolean>);
+          setExpandedAccordions(allExpanded);
+
+          // 2. 临时调整容器样式以显示所有内容
+          const originalMaxHeight = questionListRef.current?.style.maxHeight;
+          const originalOverflow = questionListRef.current?.style.overflowY;
           
-          try {
-              const canvas = await html2canvas(summaryPrintRef.current, {
-                  scale: 2,
-                  useCORS: true,
-                  logging: false,
-                  backgroundColor: '#ffffff'
-              });
-              
-               const imgData = canvas.toDataURL('image/png');
-               const pdf = new jsPDF('p', 'mm', 'a4');
-               const pdfWidth = pdf.internal.pageSize.getWidth();
-               const pdfHeight = pdf.internal.pageSize.getHeight();
-               const imgWidth = pdfWidth;
-               const imgHeight = (canvas.height * imgWidth) / canvas.width;
-               
-               let heightLeft = imgHeight;
-               let position = 0;
-   
-               if (heightLeft <= pdfHeight) {
-                   pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
-               } else {
-                   while (heightLeft > 0) {
-                       pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-                       heightLeft -= pdfHeight;
-                       position -= pdfHeight;
-                       if (heightLeft > 0) {
-                           pdf.addPage();
-                       }
-                   }
-               }
-               pdf.save(`summary_detailed_report_${new Date().toISOString().slice(0,10)}.pdf`);
-          } catch (error) {
-              console.error("Summary PDF export failed", error);
-              setError("导出汇总PDF失败");
-          } finally {
-              setShowSummaryPrint(false);
+          if (questionListRef.current) {
+              questionListRef.current.style.maxHeight = 'none';
+              questionListRef.current.style.overflowY = 'visible';
           }
-      }, 1000);
+
+          // 3. 等待渲染和动画完成
+          await new Promise(resolve => setTimeout(resolve, 1500));
+
+          const pdf = new jsPDF('p', 'mm', 'a4');
+          const pdfWidth = pdf.internal.pageSize.getWidth();
+          const pdfHeight = pdf.internal.pageSize.getHeight();
+          let cursorY = 0;
+          const margin = 10;
+
+          // 4. 分批截图并添加到 PDF
+          for (let i = 0; i < questions.length; i++) {
+              const q = questions[i];
+              const element = document.getElementById(`question-${q.id}`);
+              
+              if (element) {
+                  // 给 UI 线程喘息机会，避免界面完全卡死
+                  await new Promise(resolve => setTimeout(resolve, 100));
+
+                  const canvas = await html2canvas(element, {
+                      scale: 2,
+                      useCORS: true,
+                      logging: false,
+                      backgroundColor: '#ffffff'
+                  });
+
+                  const imgData = canvas.toDataURL('image/png');
+                  const imgWidth = pdfWidth - 2 * margin;
+                  const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+                  // 检查是否需要分页
+                  if (cursorY + imgHeight > pdfHeight - margin) {
+                      pdf.addPage();
+                      cursorY = margin;
+                  } else if (cursorY === 0) {
+                      cursorY = margin;
+                  }
+
+                  pdf.addImage(imgData, 'PNG', margin, cursorY, imgWidth, imgHeight);
+                  cursorY += imgHeight + 5; // 间距
+              }
+          }
+
+          // 5. 保存 PDF
+          pdf.save(`summary_detailed_report_${new Date().toISOString().slice(0,10)}.pdf`);
+
+          // 恢复样式
+          if (questionListRef.current) {
+              questionListRef.current.style.maxHeight = originalMaxHeight || '';
+              questionListRef.current.style.overflowY = originalOverflow || '';
+          }
+
+      } catch (error) {
+          console.error("Summary PDF export failed", error);
+          setError("导出汇总PDF失败");
+      } finally {
+          setIsExporting(false);
+      }
   };
 
 
@@ -1336,6 +1417,14 @@ function App() {
                           <Button 
                             variant="outlined" 
                             size="small"
+                            startIcon={<ExpandMoreIcon sx={{ transform: isAllExpanded() ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.3s' }} />} 
+                            onClick={handleGlobalExpandCollapse}
+                          >
+                              {isAllExpanded() ? '收起所有详情' : '展开所有详情'}
+                          </Button>
+                          <Button 
+                            variant="outlined" 
+                            size="small"
                             startIcon={<DownloadIcon />} 
                             onClick={handleExportSummaryMD}
                           >
@@ -1344,11 +1433,11 @@ function App() {
                           <Button 
                             variant="outlined" 
                             size="small"
-                            startIcon={showSummaryPrint ? <CircularProgress size={16} /> : <DownloadIcon />} 
+                            startIcon={isExporting ? <CircularProgress size={16} /> : <DownloadIcon />} 
                             onClick={handleExportSummaryPDF}
-                            disabled={showSummaryPrint}
+                            disabled={isExporting}
                           >
-                              {showSummaryPrint ? '生成中...' : '导出汇总详情(PDF)'}
+                              {isExporting ? '生成中...' : '导出汇总详情(PDF)'}
                           </Button>
                       </Stack>
                       </>
@@ -1356,7 +1445,7 @@ function App() {
               </Typography>
               
               {questions.length > 0 ? (
-                  <Box sx={{ maxHeight: 500, overflowY: 'auto', pr: 1 }}>
+                  <Box ref={questionListRef} sx={{ maxHeight: 500, overflowY: 'auto', pr: 1 }}>
                       {questions.map((q) => (
                           <Box id={`question-${q.id}`} key={q.id} sx={{ p: 2, mb: 2, borderRadius: 2, border: '1px solid', borderColor: 'divider', '&:hover': { borderColor: 'primary.light', bgcolor: 'background.default' } }}>
                               <Stack direction="row" spacing={2} justifyContent="space-between" alignItems="flex-start">
@@ -1424,6 +1513,8 @@ function App() {
                                                     result={result}
                                                     onRetry={() => handleRetry(q.id, modelLabel)}
                                                     questionId={q.id}
+                                                    expanded={expandedAccordions[elementId]}
+                                                    onExpandedChange={(isExpanded) => handleAccordionChange(elementId, isExpanded)}
                                                 />
                                               );
                                           })}
@@ -1626,82 +1717,7 @@ function App() {
       </Box>
       </Container>
         
-        {/* Hidden Container for Summary PDF Generation */}
-        {showSummaryPrint && (
-            <Box 
-                ref={summaryPrintRef}
-                sx={{ 
-                    position: 'absolute', 
-                    top: 0, 
-                    left: '-9999px', // Off-screen
-                    width: '210mm', // A4 width
-                    backgroundColor: 'white',
-                    padding: '20mm', // Margins
-                    zIndex: -1
-                }}
-            >
-                <Typography variant="h4" align="center" gutterBottom sx={{ mb: 4, fontWeight: 'bold' }}>
-                    高中化学试题深度标定与学情诊断汇总报告
-                </Typography>
-                <Typography variant="subtitle1" align="center" gutterBottom sx={{ mb: 4, color: 'text.secondary' }}>
-                    生成时间: {new Date().toLocaleString()}
-                </Typography>
-                
-                {questions.map((q) => (
-                    <Box key={q.id} sx={{ mb: 4, breakInside: 'avoid' }}>
-                        <Divider sx={{ mb: 2 }} />
-                        <Typography variant="h5" gutterBottom sx={{ fontWeight: 'bold' }}>
-                            题目 {q.id}
-                        </Typography>
-                        <Paper variant="outlined" sx={{ p: 2, mb: 2, bgcolor: '#f5f5f5' }}>
-                            <Typography variant="body1" sx={{ fontFamily: 'monospace' }}>
-                                {q.preview}
-                            </Typography>
-                        </Paper>
-                        
-                        {configs.map(config => {
-                            const modelLabel = config.label;
-                            const result = q.analysis?.[modelLabel];
-                            if (!result) return null;
-                            
-                            const isObject = typeof result === 'object' && result !== null;
-                            const finalLevel = isObject ? (result.final_level || result.comprehensive_rating?.final_level) : "未知";
-                            const markdownReport = isObject ? result.markdown_report : String(result || "");
-                            
-                            return (
-                                <Box key={modelLabel} sx={{ mt: 3, mb: 3 }}>
-                                    <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 1 }}>
-                                        <Typography variant="h6" sx={{ color: 'primary.main' }}>
-                                            {getModelDisplayName(modelLabel)}
-                                        </Typography>
-                                        <Chip label={`难度: ${finalLevel}`} size="small" {...getDifficultyChipProps(finalLevel)} />
-                                    </Stack>
-                                    
-                                    {isObject && (
-                                        <Box sx={{ mb: 2 }}>
-                                            {result.meta?.framework_topic && (
-                                                <Typography variant="body2" color="text.secondary">
-                                                    框架主题: {result.meta.framework_topic}
-                                                </Typography>
-                                            )}
-                                            {result.meta?.knowledge_topic && (
-                                                <Typography variant="body2" color="text.secondary">
-                                                    考查内容: {result.meta.knowledge_topic}
-                                                </Typography>
-                                            )}
-                                        </Box>
-                                    )}
-                                    
-                                    <Box sx={{ borderLeft: '3px solid #1976d2', pl: 2 }}>
-                                        <ReactMarkdown>{markdownReport}</ReactMarkdown>
-                                    </Box>
-                                </Box>
-                            );
-                        })}
-                    </Box>
-                ))}
-            </Box>
-        )}
+
     </Box>
   );
 }
