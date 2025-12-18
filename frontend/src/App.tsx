@@ -1152,15 +1152,22 @@ function App() {
     }
   };
 
-  const handleLoadSession = (session: RatingSession) => {
+  const handleLoadSession = (session: RatingSession | any) => {
+    if (!session) return;
     if (window.confirm("加载历史记录将覆盖当前分析结果，是否继续？")) {
-        setQuestions(session.questions);
-        setConfigs(session.modelConfigs);
-        setAnalysisMode(session.analysisMode as any);
+        // Defensive handling for potentially wrapped data or missing fields
+        const actualSession = session.data ? session.data : session;
+        
+        const safeQuestions = Array.isArray(actualSession.questions) ? actualSession.questions : [];
+        const safeConfigs = Array.isArray(actualSession.modelConfigs) ? actualSession.modelConfigs : [];
+
+        setQuestions(safeQuestions);
+        setConfigs(safeConfigs);
+        setAnalysisMode(actualSession.analysisMode || 'sub_question');
         // Reset file to null or a dummy file object if needed, but keeping it null is fine
         setFile(null); 
         // Reset progress
-        setProgress({ total: session.questions.length, completed: session.questions.length });
+        setProgress({ total: safeQuestions.length, completed: safeQuestions.length });
     }
   };
 

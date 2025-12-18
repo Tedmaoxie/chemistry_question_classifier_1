@@ -580,6 +580,7 @@ class LLMService:
             
             with open(file_path, "r", encoding="utf-8") as f:
                 standards = f.read()
+            logger.info(f"Loaded standards from {file_path}, length: {len(standards)}")
         except FileNotFoundError:
             logger.error(f"Standard file not found at: {file_path}")
             standards = "Standard file not found."

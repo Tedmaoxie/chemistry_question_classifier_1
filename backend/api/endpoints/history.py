@@ -107,4 +107,41 @@ async def get_history_detail(history_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        traceback.print_exc()
+        print(f"Error getting history detail: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get history detail: {str(e)}")
+
+@router.delete("/{history_id}")
+async def delete_history(history_id: str, background_tasks: BackgroundTasks):
+    try:
+        file_path = os.path.join(settings.HISTORY_DIR, f"{history_id}.json")
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="History not found")
+            
+        # Delete the file
+        max_retries = 3
+        for i in range(max_retries):
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                break
+            except PermissionError:
+                if i == max_retries - 1:
+                    raise
+                time.sleep(0.1)
+            except FileNotFoundError:
+                break
+            
+        # Trigger Git sync in background
+        commit_msg = f"Delete history record: {history_id}"
+        background_tasks.add_task(_git_sync, commit_msg)
+        
+        return {"status": "success", "id": history_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"Error deleting history: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete history: {str(e)}")

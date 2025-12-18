@@ -10,14 +10,13 @@ import StorageIcon from '@mui/icons-material/Storage';
 import CloudIcon from '@mui/icons-material/Cloud';
 import axios from 'axios';
 import { RatingSession, RatingSessionSummary } from '../types';
-import { getSessionList, getSessionDetail } from '../utils/indexedDb';
+import { getSessionList, getSessionDetail, deleteSession } from '../utils/indexedDb';
 
 interface HistorySelectorProps {
     open: boolean;
     onClose: () => void;
     onLoad: (session: RatingSession) => void;
 }
-
 interface TabPanelProps {
     children?: React.ReactNode;
     index: number;
@@ -79,22 +78,58 @@ export const HistorySelector: React.FC<HistorySelectorProps> = ({ open, onClose,
     const handleLoadLocal = async (id: string) => {
         try {
             const session = await getSessionDetail(id);
-            onLoad(session);
-            onClose();
+            if (session) {
+                onLoad(session);
+                onClose();
+            } else {
+                alert("未找到本地记录");
+            }
         } catch (err) {
             console.error("Failed to load local session", err);
-            alert("Failed to load local session");
+            alert("加载本地记录失败");
+        }
+    };
+
+    const handleDeleteLocal = async (id: string, event: React.MouseEvent) => {
+        event.stopPropagation(); // Prevent loading the session when clicking delete
+        if (!window.confirm("确定要删除这条本地记录吗？")) return;
+        
+        try {
+            await deleteSession(id);
+            setLocalHistory(prev => prev.filter(item => item.id !== id));
+        } catch (err) {
+            console.error("Failed to delete local session", err);
+            alert("删除本地记录失败");
         }
     };
 
     const handleLoadRemote = async (id: string) => {
         try {
             const response = await axios.get(`http://localhost:8000/api/history/${id}`);
-            onLoad(response.data);
+            // Backend returns HistoryItem with actual session in 'data' field
+            const historyItem = response.data;
+            if (historyItem && historyItem.data) {
+                onLoad(historyItem.data);
+            } else {
+                onLoad(historyItem);
+            }
             onClose();
         } catch (err) {
             console.error("Failed to load remote session", err);
             alert("Failed to load remote session");
+        }
+    };
+
+    const handleDeleteRemote = async (id: string, event: React.MouseEvent) => {
+        event.stopPropagation(); // Prevent loading the session when clicking delete
+        if (!window.confirm("确定要删除这条云端记录吗？这将同时删除 GitHub 上的备份。")) return;
+        
+        try {
+            await axios.delete(`http://localhost:8000/api/history/${id}`);
+            setRemoteHistory(prev => prev.filter(item => item.id !== id));
+        } catch (err) {
+            console.error("Failed to delete remote session", err);
+            alert("删除云端记录失败");
         }
     };
 
@@ -121,7 +156,13 @@ export const HistorySelector: React.FC<HistorySelectorProps> = ({ open, onClose,
                             ) : (
                                 <List>
                                     {localHistory.map((item) => (
-                                        <ListItem key={item.id} disablePadding>
+                                        <ListItem key={item.id} disablePadding
+                                            secondaryAction={
+                                                <IconButton edge="end" aria-label="delete" onClick={(e) => handleDeleteLocal(item.id, e)}>
+                                                    <DeleteIcon />
+                                                </IconButton>
+                                            }
+                                        >
                                             <ListItemButton onClick={() => handleLoadLocal(item.id)}>
                                                 <ListItemText 
                                                     primary={item.examName} 
@@ -140,7 +181,13 @@ export const HistorySelector: React.FC<HistorySelectorProps> = ({ open, onClose,
                             ) : (
                                 <List>
                                     {remoteHistory.map((item) => (
-                                        <ListItem key={item.id} disablePadding>
+                                        <ListItem key={item.id} disablePadding
+                                            secondaryAction={
+                                                <IconButton edge="end" aria-label="delete" onClick={(e) => handleDeleteRemote(item.id, e)}>
+                                                    <DeleteIcon />
+                                                </IconButton>
+                                            }
+                                        >
                                             <ListItemButton onClick={() => handleLoadRemote(item.id)}>
                                                 <ListItemText 
                                                     primary={item.examName} 

@@ -106,3 +106,14 @@ export async function getSessionDetail(id: string): Promise<RatingSession> {
         });
     });
 }
+
+
+export async function deleteSession(id: string): Promise<void> {
+    await withStore('readwrite', async (store) => {
+        return new Promise<void>((resolve, reject) => {
+            const req = store.delete(id);
+            req.onsuccess = () => resolve();
+            req.onerror = () => reject(req.error);
+        });
+    });
+}
