@@ -569,11 +569,11 @@ class LLMService:
             project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             
             if mode == "multiple_analysis":
-                file_name = "mutiple analysis API.md"
+                file_name = "multiple_analysis_API.md"
             elif mode == "single_analysis":
-                file_name = "single analysis API.md"
+                file_name = "single_analysis_API.md"
             else:
-                file_name = "for API.md"
+                file_name = "for_API.md"
                 
             file_path = os.path.join(project_root, file_name)
             

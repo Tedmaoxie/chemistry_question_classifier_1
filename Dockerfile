@@ -38,10 +38,10 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 # 复制后端源码
 COPY backend/ ./backend/
 
-# 复制提示词 Markdown 文件 (必须使用 JSON 数组格式以支持文件名中的空格)
-COPY ["for API.md", "."]
-COPY ["mutiple analysis API.md", "."]
-COPY ["single analysis API.md", "."]
+# 复制提示词 Markdown 文件
+COPY for_API.md .
+COPY multiple_analysis_API.md .
+COPY single_analysis_API.md .
 
 # 复制启动脚本
 COPY start.sh .
