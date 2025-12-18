@@ -1,16 +1,18 @@
-# 使用官方 Python 3.11 轻量级镜像
+# 使用官方 Python 3.11 轻量级镜像 (基于 Debian Bookworm，支持 Node 20)
+# 但为了确保 nodejs 兼容性，我们最好显式安装 node 20
 FROM python:3.11-slim
 
-# 设置环境变量，防止 Python 生成字节码和缓存
+# 设置环境变量
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# 安装系统依赖：Redis (任务队列), Node.js (构建前端), Curl
+# 安装系统依赖
+# 注意：使用 nodesource 安装 Node.js 20.x
 RUN apt-get update && apt-get install -y \
     redis-server \
     curl \
     gnupg \
-    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
