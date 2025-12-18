@@ -11,6 +11,8 @@ import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import InsightsIcon from '@mui/icons-material/Insights';
+import SaveIcon from '@mui/icons-material/Save';
+import HistoryIcon from '@mui/icons-material/History';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import jsPDF from 'jspdf';
@@ -18,7 +20,9 @@ import html2canvas from 'html2canvas';
 
 import { DifficultyMatrix } from './components/DifficultyMatrix';
 import { DataVisualization } from './components/DataVisualization';
-import { Question, ModelConfig, ModelTaskStatus } from './types';
+import { HistorySelector } from './components/HistorySelector';
+import { Question, ModelConfig, ModelTaskStatus, RatingSession } from './types';
+import { saveSessionToIndexedDB } from './utils/indexedDb';
 import { extractAbilityCodes, getDifficultyChipProps, PROVIDER_NAMES } from './utils/helpers';
 
 const DEFAULT_CONFIG: Omit<ModelConfig, 'id' | 'label'> = {
@@ -344,6 +348,10 @@ function App() {
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({}); // 全局折叠状态管理
   const [isExporting, setIsExporting] = useState(false); // PDF导出状态
   const questionListRef = useRef<HTMLDivElement>(null); // 题目列表容器引用
+
+  // --- History Feature State ---
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   // --- 交互功能：全局折叠/展开 ---
   const handleAccordionChange = (id: string, isExpanded: boolean) => {
@@ -1103,6 +1111,59 @@ function App() {
       }
   };
 
+  // --- History Handlers ---
+  const handleSaveSession = async () => {
+    if (questions.length === 0) {
+        alert("暂无分析结果可保存");
+        return;
+    }
+    setIsSaving(true);
+    try {
+        const session: RatingSession = {
+            id: crypto.randomUUID(),
+            examName: file ? file.name.replace(/\.[^/.]+$/, "") : `Analysis-${new Date().toISOString().slice(0, 19).replace('T', ' ')}`,
+            createdAt: new Date().toISOString(),
+            analysisMode,
+            modelConfigs: configs,
+            questions,
+            schemaVersion: 1
+        };
+
+        // Save to IndexedDB
+        await saveSessionToIndexedDB(session);
+
+        // Save to Backend (optional, background sync)
+        try {
+            await axios.post('http://localhost:8000/api/history/save', {
+                ...session,
+                questionCount: questions.length,
+                data: session
+            });
+        } catch (err) {
+            console.warn("Failed to sync to backend", err);
+        }
+
+        alert("评级结果保存成功！");
+    } catch (err) {
+        console.error("Failed to save session", err);
+        alert("保存失败");
+    } finally {
+        setIsSaving(false);
+    }
+  };
+
+  const handleLoadSession = (session: RatingSession) => {
+    if (window.confirm("加载历史记录将覆盖当前分析结果，是否继续？")) {
+        setQuestions(session.questions);
+        setConfigs(session.modelConfigs);
+        setAnalysisMode(session.analysisMode as any);
+        // Reset file to null or a dummy file object if needed, but keeping it null is fine
+        setFile(null); 
+        // Reset progress
+        setProgress({ total: session.questions.length, completed: session.questions.length });
+    }
+  };
+
 
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', pb: 4 }}>
@@ -1113,7 +1174,7 @@ function App() {
           <Typography variant="h5" component="div" sx={{ flexGrow: 1, fontWeight: 700, letterSpacing: 0.5 }}>
             AI赋能高中化学教学系列by实验中学
           </Typography>
-          <Chip label="v1.0" color="secondary" size="small" sx={{ fontWeight: 'bold' }} />
+          <Chip label="v1.1" color="secondary" size="small" sx={{ fontWeight: 'bold' }} />
         </Toolbar>
       </AppBar>
 
@@ -1357,6 +1418,24 @@ function App() {
                   </Typography>
                 </Box>
                 <Stack direction="row" spacing={1}>
+                  <Button 
+                    variant="outlined" 
+                    startIcon={<HistoryIcon />} 
+                    onClick={() => setHistoryOpen(true)}
+                    sx={{ borderRadius: 2 }}
+                  >
+                    历史记录
+                  </Button>
+                  <Button 
+                    variant="contained" 
+                    color="success"
+                    startIcon={isSaving ? <CircularProgress size={20} color="inherit" /> : <SaveIcon />} 
+                    disabled={questions.length === 0 || isSaving}
+                    onClick={handleSaveSession}
+                    sx={{ borderRadius: 2 }}
+                  >
+                    {isSaving ? "保存中..." : "保存评级结果"}
+                  </Button>
                   <Button 
                     variant="contained" 
                     startIcon={<PlayArrowIcon />} 
@@ -1718,6 +1797,11 @@ function App() {
       </Container>
         
 
+        <HistorySelector 
+            open={historyOpen} 
+            onClose={() => setHistoryOpen(false)} 
+            onLoad={handleLoadSession} 
+        />
     </Box>
   );
 }

@@ -16,7 +16,12 @@ class Settings:
     CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
     CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/0")
 
+    # History Settings
+    HISTORY_DIR: str = os.path.join(os.getcwd(), "data", "history")
+    GIT_TARGET_BRANCH: str = os.getenv("GIT_TARGET_BRANCH", "main")
+
 settings = Settings()
 
-# Ensure upload directory exists
+# Ensure directories exist
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+os.makedirs(settings.HISTORY_DIR, exist_ok=True)

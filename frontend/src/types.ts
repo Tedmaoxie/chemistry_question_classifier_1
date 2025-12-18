@@ -25,3 +25,21 @@ export interface ModelConfig {
     modelName: string;
     temperature: number;
 }
+
+export interface RatingSession {
+    id: string;
+    examName: string;
+    createdAt: string;
+    analysisMode: string;
+    modelConfigs: ModelConfig[];
+    questions: Question[];
+    schemaVersion: number;
+    appVersion?: string;
+}
+
+export interface RatingSessionSummary {
+    id: string;
+    examName: string;
+    createdAt: string;
+    questionCount: number;
+}
