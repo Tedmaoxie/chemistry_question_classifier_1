@@ -566,6 +566,7 @@ class LLMService:
         # In a real app, we might cache this content
         try:
             # Use absolute path to ensure file is found regardless of CWD
+            # Fixed filename to match actual file on disk
             project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             
             if mode == "multiple_analysis":
