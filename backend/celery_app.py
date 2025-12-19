@@ -7,12 +7,22 @@ print(f"DEBUG Celery: sys.path: {sys.path}")
 # Use absolute import for backend package structure
 from backend.config import settings
 
+import os
+
 celery_app = Celery(
     "worker",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
     include=["backend.tasks.analysis", "backend.tasks.score"]
 )
+
+# Check if running in Desktop mode (set by run_backend.py)
+if os.environ.get("RUNNING_DESKTOP") == "true":
+    print("Running in DESKTOP mode: Enabling CELERY_TASK_ALWAYS_EAGER")
+    celery_app.conf.update(
+        task_always_eager=True,
+        task_eager_propagates=True  # Exceptions in tasks will be raised directly
+    )
 
 celery_app.conf.update(
     task_serializer="json",
