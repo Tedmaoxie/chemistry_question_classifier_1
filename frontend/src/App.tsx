@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Container, Box, Typography, Paper, GridLegacy as Grid, Button, Slider, FormControlLabel, TextField, LinearProgress, Stack, Alert, Chip, Card, CardContent, Divider, Radio, RadioGroup, FormControl, FormLabel, Tooltip, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Select, MenuItem, InputLabel, Accordion, AccordionSummary, AccordionDetails, CircularProgress, AppBar, Toolbar, Tabs, Tab } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
@@ -44,8 +44,8 @@ const PROVIDER_DEFAULTS: Record<string, Partial<ModelConfig>> = {
 
 // --- 子组件：模型结果折叠面板 ---
 // 独立组件以管理展开/折叠状态，避免"controlled/uncontrolled"警告
-const ModelResultAccordion = ({ 
-    // modelLabel, 
+const ModelResultAccordion = React.memo(({ 
+    modelLabel, 
     displayName, 
     statusInfo, 
     result,
@@ -60,12 +60,12 @@ const ModelResultAccordion = ({
     displayName: string, 
     statusInfo: ModelTaskStatus | undefined, 
     result: any,
-    id?: string,
+    id: string,
     highlighted?: boolean,
-    onRetry?: () => void,
-    questionId?: string,
+    onRetry?: (questionId: string, modelLabel: string) => void,
+    questionId: string,
     expanded?: boolean,
-    onExpandedChange?: (isExpanded: boolean) => void
+    onExpandedChange?: (id: string, isExpanded: boolean) => void
 }) => {
     const [localExpanded, setLocalExpanded] = useState(false);
     const isControlled = expandedProp !== undefined;
@@ -81,29 +81,29 @@ const ModelResultAccordion = ({
         if (status !== prevStatus.current) {
             if ((status === 'processing' || status === 'completed') && !expanded) {
                  if (isControlled) {
-                     onExpandedChange?.(true);
+                     onExpandedChange?.(id, true);
                  } else {
                      setLocalExpanded(true);
                  }
             }
             prevStatus.current = status;
         }
-    }, [statusInfo?.status, expanded, isControlled, onExpandedChange]);
+    }, [statusInfo?.status, expanded, isControlled, onExpandedChange, id]);
 
     // 如果被高亮，自动展开
     useEffect(() => {
         if (highlighted && !expanded) {
             if (isControlled) {
-                onExpandedChange?.(true);
+                onExpandedChange?.(id, true);
             } else {
                 setLocalExpanded(true);
             }
         }
-    }, [highlighted, expanded, isControlled, onExpandedChange]);
+    }, [highlighted, expanded, isControlled, onExpandedChange, id]);
 
     const handleChange = (_event: React.SyntheticEvent, isExpanded: boolean) => {
         if (isControlled) {
-            onExpandedChange?.(isExpanded);
+            onExpandedChange?.(id, isExpanded);
         } else {
             setLocalExpanded(isExpanded);
         }
@@ -200,6 +200,7 @@ const ModelResultAccordion = ({
             onChange={handleChange}
             disabled={isPending} 
             variant="outlined" 
+            TransitionProps={{ unmountOnExit: true }}
             sx={{ 
                 mb: 1,
                 backgroundColor: highlighted ? '#E3F2FD' : 'inherit',
@@ -248,7 +249,7 @@ const ModelResultAccordion = ({
                                 size="small"
                                 onClick={(e) => {
                                     e.stopPropagation();
-                                    onRetry && onRetry();
+                                    onRetry && onRetry(questionId, modelLabel);
                                 }}
                                 startIcon={<RefreshIcon />}
                                 sx={{ fontSize: '12px', padding: '2px 8px', minWidth: 'auto' }}
@@ -313,7 +314,7 @@ const ModelResultAccordion = ({
                             color="primary" 
                             size="small" 
                             startIcon={<RefreshIcon />}
-                            onClick={() => onRetry && onRetry()}
+                            onClick={() => onRetry && onRetry(questionId, modelLabel)}
                         >
                             重新评定
                         </Button>
@@ -324,7 +325,7 @@ const ModelResultAccordion = ({
             </AccordionDetails>
         </Accordion>
     );
-};
+});
 
 import { ScoreAnalysisView } from './components/ScoreAnalysisView';
 
@@ -349,14 +350,26 @@ function App() {
   const [isExporting, setIsExporting] = useState(false); // PDF导出状态
   const questionListRef = useRef<HTMLDivElement>(null); // 题目列表容器引用
 
+  // --- Refs for stable handlers ---
+  const questionsRef = useRef(questions);
+  const configsRef = useRef(configs);
+  
+  useEffect(() => {
+      questionsRef.current = questions;
+  }, [questions]);
+  
+  useEffect(() => {
+      configsRef.current = configs;
+  }, [configs]);
+
   // --- History Feature State ---
   const [historyOpen, setHistoryOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   // --- 交互功能：全局折叠/展开 ---
-  const handleAccordionChange = (id: string, isExpanded: boolean) => {
+  const handleAccordionChange = useCallback((id: string, isExpanded: boolean) => {
       setExpandedAccordions(prev => ({ ...prev, [id]: isExpanded }));
-  };
+  }, []);
 
   const getAllAccordionIds = () => {
       return questions.flatMap(q => 
@@ -412,12 +425,18 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // --- 事件处理：并发配置 ---
-  const handleConcurrencyChange = (newCount: number) => {
-    setConcurrency(newCount);
+  // 仅更新 UI 数值，不触发昂贵的配置重构
+  const handleConcurrencyChange = (_event: Event, newCount: number | number[]) => {
+    setConcurrency(newCount as number);
+  };
+
+  // 拖动结束时才触发配置重构
+  const handleConcurrencyChangeCommitted = (_event: React.SyntheticEvent | Event, newCount: number | number[]) => {
+    const count = newCount as number;
     setConfigs(prev => {
         const newConfigs = [...prev];
-        if (newCount > prev.length) {
-            for (let i = prev.length + 1; i <= newCount; i++) {
+        if (count > prev.length) {
+            for (let i = prev.length + 1; i <= count; i++) {
                 // Clone the first config's key/provider for convenience, or use default
                 const baseConfig = prev[0] || DEFAULT_CONFIG;
                 newConfigs.push({
@@ -427,7 +446,7 @@ function App() {
                 });
             }
         } else {
-            newConfigs.splice(newCount);
+            newConfigs.splice(count);
         }
         return newConfigs;
     });
@@ -569,9 +588,9 @@ function App() {
   };
 
   // --- 核心功能：重试分析 ---
-  const handleRetry = async (questionId: string, modelLabel: string) => {
-      const question = questions.find(q => q.id === questionId);
-      const config = configs.find(c => c.label === modelLabel);
+  const handleRetry = useCallback(async (questionId: string, modelLabel: string) => {
+      const question = questionsRef.current.find(q => q.id === questionId);
+      const config = configsRef.current.find(c => c.label === modelLabel);
       
       if (!question || !config) return;
 
@@ -657,7 +676,7 @@ function App() {
               return q;
           }));
       }
-  };
+  }, []);
 
   // --- 核心功能：开始分析 ---
   const startAnalysis = async () => {
@@ -750,11 +769,21 @@ function App() {
       const updates: Record<string, { modelStatus: Record<string, ModelTaskStatus>, analysis: Record<string, any> }> = {};
       let newlyCompletedTasks = 0;
 
-      await Promise.all(pendingTasks.map(async (task) => {
-          try {
-              const res = await axios.get(`/api/tasks/${task.taskId}`);
-              const status = res.data.status;
-              
+      // Use batch status check
+      try {
+          const taskIds = pendingTasks.map(t => t.taskId);
+          const res = await axios.post('/api/tasks/status', taskIds);
+          const taskResults = res.data; // Record<string, any>
+
+          pendingTasks.forEach(task => {
+              const data = taskResults[task.taskId];
+              if (!data) {
+                  remainingTasks.push(task);
+                  return;
+              }
+
+              const status = data.status;
+
               if (status === 'SUCCESS' || status === 'FAILURE' || status === 'REVOKED') {
                   // Initialize update object for this question if not exists
                   if (!updates[task.qId]) {
@@ -766,30 +795,29 @@ function App() {
                   updates[task.qId].modelStatus[task.model] = {
                       status: status === 'SUCCESS' ? 'completed' : 'failed',
                       taskId: task.taskId,
-                      result: res.data.result, // Contains full result including elapsed_time
-                      error: res.data.error || (status === 'REVOKED' ? "任务已终止" : undefined),
+                      result: data.result, // Contains full result including elapsed_time
+                      error: data.error || (status === 'REVOKED' ? "任务已终止" : undefined),
                       endTime: endTime
                   };
 
                   // Update analysis result
                   if (status === 'SUCCESS') {
-                      // Note: Backend result structure: { model_label: "...", result: { ... } }
-                      // We want just the inner result part for 'analysis' map
-                      updates[task.qId].analysis[task.model] = res.data.result.result; 
+                      updates[task.qId].analysis[task.model] = data.result.result; 
                   } else if (status === 'FAILURE') {
-                      console.error(`Task failed for ${task.model}:`, res.data.error);
+                      console.error(`Task failed for ${task.model}:`, data.error);
                   }
                   
                   newlyCompletedTasks++;
               } else {
-                  // Still pending/processing
                   remainingTasks.push(task);
               }
-          } catch (e) {
-              console.error(`Error polling task ${task.taskId}`, e);
-              remainingTasks.push(task); // Retry later
-          }
-      }));
+          });
+
+      } catch (e) {
+          console.error("Error polling tasks batch", e);
+          // If batch fails, retry all
+          remainingTasks.push(...pendingTasks);
+      }
 
       // Apply updates to state
       if (Object.keys(updates).length > 0) {
@@ -814,12 +842,6 @@ function App() {
               }
               return q;
           }));
-          
-          // Update completed tasks count roughly (since we don't track total tasks in progress state)
-          // We can just increment completed by newlyCompletedTasks / configs.length to approximate question progress
-          // Or just update based on fully completed questions.
-          // Let's rely on completed questions count for progress bar to be consistent with "Questions Progress"
-          // setProgress will be updated by checking completed questions
       }
 
       // Update progress bar based on questions completed
@@ -829,7 +851,6 @@ function App() {
           return prev;
       });
 
-      // Continue polling
       if (remainingTasks.length > 0) {
           setTimeout(() => pollTasks(remainingTasks), 2000);
       } else {
@@ -1318,7 +1339,8 @@ function App() {
               <Typography variant="subtitle2">并发控制 (1-5)</Typography>
               <Slider
                 value={concurrency}
-                onChange={(_, val) => handleConcurrencyChange(val as number)}
+                onChange={handleConcurrencyChange}
+                onChangeCommitted={handleConcurrencyChangeCommitted}
                 step={1}
                 marks
                 min={1}
@@ -1597,10 +1619,10 @@ function App() {
                                                     displayName={getModelDisplayName(modelLabel)}
                                                     statusInfo={statusInfo}
                                                     result={result}
-                                                    onRetry={() => handleRetry(q.id, modelLabel)}
+                                                    onRetry={handleRetry}
                                                     questionId={q.id}
                                                     expanded={expandedAccordions[elementId]}
-                                                    onExpandedChange={(isExpanded) => handleAccordionChange(elementId, isExpanded)}
+                                                    onExpandedChange={handleAccordionChange}
                                                 />
                                               );
                                           })}

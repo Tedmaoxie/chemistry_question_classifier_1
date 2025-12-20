@@ -159,6 +159,55 @@ async def get_task_status(task_id: str):
         # If likely invalid ID or other error
         return {"task_id": task_id, "status": "PENDING"}
 
+@router.post("/tasks/status")
+async def get_tasks_status(task_ids: List[str] = Body(...)):
+    """
+    Batch check status for multiple tasks.
+    """
+    results = {}
+    
+    # optimize by grouping checks if possible, but for now simple loop is better than N http requests
+    for task_id in task_ids:
+        # Check memory tasks first
+        if task_id in MEMORY_TASKS:
+            task_info = MEMORY_TASKS[task_id]
+            status = task_info.get("status")
+            res = {
+                "task_id": task_id,
+                "status": status,
+            }
+            if status == "SUCCESS":
+                res["result"] = task_info.get("result")
+            elif status == "FAILURE":
+                 res["error"] = task_info.get("error")
+            results[task_id] = res
+            continue
+
+        # Fallback to Celery check
+        try:
+            task_result = AsyncResult(task_id, app=celery_app)
+            status = task_result.status
+            
+            res = {
+                "task_id": task_id,
+                "status": status,
+            }
+            
+            if task_result.ready():
+                res["result"] = task_result.result
+                if status == 'SUCCESS':
+                     res["status"] = 'SUCCESS'
+            elif task_result.failed():
+                res["error"] = str(task_result.result)
+                res["status"] = 'FAILURE'
+                
+            results[task_id] = res
+        except Exception as e:
+            logger.error(f"Error checking task {task_id}: {e}")
+            results[task_id] = {"task_id": task_id, "status": "PENDING"}
+            
+    return results
+
 @router.post("/tasks/stop")
 async def stop_tasks(task_ids: List[str] = Body(...)):
     """
