@@ -341,13 +341,18 @@ class LLMService:
             cleaned_text = self._clean_json_response(result_text)
             
             try:
-                # Use strict=False to allow control characters (like newlines) inside strings
+                # First try standard JSON parsing with strict=False
                 data = json.loads(cleaned_text, strict=False)
             except json.JSONDecodeError as e:
-                logger.error(f"JSON Parse Error: {e}. Raw text: {result_text[:500]}...")
-                # If "Unterminated string", it's likely truncation despite max_tokens
-                snippet = result_text[:100] if result_text else "EMPTY"
-                raise ValueError(f"Failed to parse JSON response: {str(e)}. Raw snippet: {snippet}...")
+                logger.warning(f"Standard JSON parse failed, trying json_repair. Error: {e}")
+                try:
+                    # Fallback to json_repair for robust parsing
+                    data = json_repair.loads(cleaned_text)
+                except Exception as repair_error:
+                    logger.error(f"JSON Parse Error: {e}. Repair failed: {repair_error}. Raw text: {result_text[:500]}...")
+                    # If "Unterminated string", it's likely truncation despite max_tokens
+                    snippet = result_text[:100] if result_text else "EMPTY"
+                    raise ValueError(f"Failed to parse JSON response: {str(e)}. Raw snippet: {snippet}...")
             
             # Validation
             if mode == "question_analysis":
