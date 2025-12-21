@@ -347,7 +347,8 @@ function App() {
   const [taskIds, setTaskIds] = useState<string[]>([]); // 当前任务ID列表
   const [highlightedId, setHighlightedId] = useState<string | null>(null); // 高亮显示的分析结果ID
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({}); // 全局折叠状态管理
-  const [isExporting, setIsExporting] = useState(false); // PDF导出状态
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(''); // PDF导出状态
   const questionListRef = useRef<HTMLDivElement>(null); // 题目列表容器引用
 
   // --- Refs for stable handlers ---
@@ -1057,14 +1058,16 @@ function App() {
   const handleExportSummaryPDF = async () => {
       if (questions.length === 0) return;
       setIsExporting(true);
+      setExportProgress('准备中...');
+
+      // 保存当前的展开状态，以便结束后恢复（可选，或者就让它保持闭合）
+      const originalExpanded = { ...expandedAccordions };
+      
+      // 先收起所有，避免 DOM 过大
+      setExpandedAccordions({});
 
       try {
-          // 1. 展开所有题目
-          const ids = getAllAccordionIds();
-          const allExpanded = ids.reduce((acc, id) => ({ ...acc, [id]: true }), {} as Record<string, boolean>);
-          setExpandedAccordions(allExpanded);
-
-          // 2. 临时调整容器样式以显示所有内容
+          // 临时调整容器样式以显示所有内容
           const originalMaxHeight = questionListRef.current?.style.maxHeight;
           const originalOverflow = questionListRef.current?.style.overflowY;
           
@@ -1073,49 +1076,72 @@ function App() {
               questionListRef.current.style.overflowY = 'visible';
           }
 
-          // 3. 等待渲染和动画完成
-          await new Promise(resolve => setTimeout(resolve, 1500));
-
           const pdf = new jsPDF('p', 'mm', 'a4');
           const pdfWidth = pdf.internal.pageSize.getWidth();
           const pdfHeight = pdf.internal.pageSize.getHeight();
           let cursorY = 0;
           const margin = 10;
-
-          // 4. 分批截图并添加到 PDF
-          for (let i = 0; i < questions.length; i++) {
-              const q = questions[i];
-              const element = document.getElementById(`question-${q.id}`);
+          
+          // 分批处理的大小
+          const BATCH_SIZE = 5; 
+          
+          for (let i = 0; i < questions.length; i += BATCH_SIZE) {
+              const chunk = questions.slice(i, i + BATCH_SIZE);
+              const chunkIndex = Math.floor(i / BATCH_SIZE) + 1;
+              const totalChunks = Math.ceil(questions.length / BATCH_SIZE);
               
-              if (element) {
-                  // 给 UI 线程喘息机会，避免界面完全卡死
-                  await new Promise(resolve => setTimeout(resolve, 100));
+              setExportProgress(`处理中 ${i + 1}/${questions.length}...`);
 
-                  const canvas = await html2canvas(element, {
-                      scale: 2,
-                      useCORS: true,
-                      logging: false,
-                      backgroundColor: '#ffffff'
+              // 1. 展开当前批次的 Accordion
+              const batchExpandedState: Record<string, boolean> = {};
+              chunk.forEach(q => {
+                  configs.forEach(c => {
+                      const elementId = `analysis-${q.id}-${c.label}`;
+                      batchExpandedState[elementId] = true;
                   });
+              });
+              setExpandedAccordions(batchExpandedState);
 
-                  const imgData = canvas.toDataURL('image/png');
-                  const imgWidth = pdfWidth - 2 * margin;
-                  const imgHeight = (canvas.height * imgWidth) / canvas.width;
+              // 2. 等待渲染
+              // 减少等待时间：如果批次小，渲染应该快。800ms 应该足够 Markdown/KaTeX 渲染
+              await new Promise(resolve => setTimeout(resolve, 800));
 
-                  // 检查是否需要分页
-                  if (cursorY + imgHeight > pdfHeight - margin) {
-                      pdf.addPage();
-                      cursorY = margin;
-                  } else if (cursorY === 0) {
-                      cursorY = margin;
+              // 3. 截图当前批次
+              for (const q of chunk) {
+                  const element = document.getElementById(`question-${q.id}`);
+                  if (element) {
+                      // 给 UI 线程喘息机会
+                      await new Promise(resolve => setTimeout(resolve, 50));
+
+                      const canvas = await html2canvas(element, {
+                          scale: 1.5, // 降低一点 Scale 提升速度，默认是 2
+                          useCORS: true,
+                          logging: false,
+                          backgroundColor: '#ffffff'
+                      });
+
+                      const imgData = canvas.toDataURL('image/png');
+                      const imgWidth = pdfWidth - 2 * margin;
+                      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+                      // 检查是否需要分页
+                      if (cursorY + imgHeight > pdfHeight - margin) {
+                          pdf.addPage();
+                          cursorY = margin;
+                      } else if (cursorY === 0) {
+                          cursorY = margin;
+                      }
+
+                      pdf.addImage(imgData, 'PNG', margin, cursorY, imgWidth, imgHeight);
+                      cursorY += imgHeight + 5;
                   }
-
-                  pdf.addImage(imgData, 'PNG', margin, cursorY, imgWidth, imgHeight);
-                  cursorY += imgHeight + 5; // 间距
               }
+
+              // 4. 收起当前批次，释放 DOM 内存
+              setExpandedAccordions({});
           }
 
-          // 5. 保存 PDF
+          setExportProgress('保存中...');
           pdf.save(`summary_detailed_report_${new Date().toISOString().slice(0,10)}.pdf`);
 
           // 恢复样式
@@ -1123,12 +1149,19 @@ function App() {
               questionListRef.current.style.maxHeight = originalMaxHeight || '';
               questionListRef.current.style.overflowY = originalOverflow || '';
           }
+          
+          // 恢复原始展开状态 (或者保持全部收起，看用户体验，恢复可能比较卡)
+          // setExpandedAccordions(originalExpanded); 
+          // 既然已经全部收起了，不如就让它收起，或者只展开用户之前展开的。
+          // 这里选择恢复用户之前的状态
+          setExpandedAccordions(originalExpanded);
 
       } catch (error) {
           console.error("Summary PDF export failed", error);
           setError("导出汇总PDF失败");
       } finally {
           setIsExporting(false);
+          setExportProgress('');
       }
   };
 
@@ -1545,7 +1578,7 @@ function App() {
                             onClick={handleExportSummaryPDF}
                             disabled={isExporting}
                           >
-                              {isExporting ? '生成中...' : '导出汇总详情(PDF)'}
+                              {isExporting ? (exportProgress || '生成中...') : '导出汇总详情(PDF)'}
                           </Button>
                       </Stack>
                       </>
