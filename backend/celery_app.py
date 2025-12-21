@@ -20,6 +20,7 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="Asia/Shanghai",
     enable_utc=True,
+    broker_connection_retry_on_startup=True,
     # Task routing can be added here if needed
 )
 

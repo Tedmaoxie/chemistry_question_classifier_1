@@ -690,6 +690,7 @@ function App() {
 
       setAnalyzing(true);
       setProgress({ total: questions.length, completed: 0 });
+      setAnalysisStartTime(Date.now()); // Set start time
       
       try {
           // 1. 启动分析任务
@@ -759,8 +760,53 @@ function App() {
       }
   };
 
-  // --- 辅助功能：轮询任务结果 ---
-  const pollTasks = async (pendingTasks: { qId: string, model: string, taskId: string }[]) => {
+  const [analysisStartTime, setAnalysisStartTime] = useState<number | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const [avgTimePerTask, setAvgTimePerTask] = useState<number>(0);
+
+  // Update 'now' every second to refresh timer
+  useEffect(() => {
+      if (!analyzing) return;
+      const timer = setInterval(() => setNow(Date.now()), 1000);
+      return () => clearInterval(timer);
+  }, [analyzing]);
+
+  // Update average time per task when a task completes
+  useEffect(() => {
+      if (progress.completed > 0 && analysisStartTime) {
+          // Use current time as the "completion time" for the latest batch
+          // Note: This is an approximation. Ideally we'd use the timestamp of the last completion event.
+          const elapsed = (Date.now() - analysisStartTime) / 1000;
+          setAvgTimePerTask(elapsed / progress.completed);
+      } else if (progress.completed === 0) {
+          setAvgTimePerTask(0);
+      }
+  }, [progress.completed, analysisStartTime]);
+
+  // Estimate remaining time
+    const estimatedTimeRemaining = React.useMemo(() => {
+        if (!analyzing || !analysisStartTime) return null;
+        if (progress.completed === progress.total && progress.total > 0) return null;
+        
+        // Show "Calculating..." if no tasks are completed yet
+        if (progress.completed === 0 || avgTimePerTask === 0) {
+            return "计算中...";
+        }
+        
+        // Calculate total expected duration based on fixed average time
+        const totalExpectedDuration = avgTimePerTask * progress.total;
+        const elapsedTotal = (now - analysisStartTime) / 1000;
+        
+        // Remaining time = Total Expected - Elapsed
+        // This ensures the countdown decreases as 'now' increases
+        const remainingSeconds = Math.max(0, Math.round(totalExpectedDuration - elapsedTotal));
+        
+        if (remainingSeconds < 60) return `${remainingSeconds}秒`;
+        return `${Math.ceil(remainingSeconds / 60)}分钟`;
+    }, [progress.total, progress.completed, analyzing, analysisStartTime, now, avgTimePerTask]);
+
+    // --- 辅助功能：轮询任务结果 ---
+    const pollTasks = async (pendingTasks: { qId: string, model: string, taskId: string }[]) => {
       if (pendingTasks.length === 0) {
           setAnalyzing(false);
           return;
@@ -1478,6 +1524,11 @@ function App() {
                   <Typography variant="body2" color="text.secondary">
                       题目数量: {questions.length} | 进度: {progress.completed}/{questions.length} | 状态: {analyzing ? "进行中..." : "就绪"}
                   </Typography>
+                  {analyzing && estimatedTimeRemaining && (
+                    <Typography variant="body2" color="primary" sx={{ mt: 0.5, fontWeight: 'medium' }}>
+                        预计剩余时间: 约 {estimatedTimeRemaining}
+                    </Typography>
+                  )}
                 </Box>
                 <Stack direction="row" spacing={1}>
                   <Button 
