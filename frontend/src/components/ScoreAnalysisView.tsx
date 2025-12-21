@@ -989,6 +989,7 @@ interface AnalysisSessionState {
     tasks: TaskInfo[];
     selectedResultId: string | null;
     analyzing: boolean;
+    analysisStartTime: number | null;
 }
 
 const initialSessionState: AnalysisSessionState = {
@@ -998,7 +999,8 @@ const initialSessionState: AnalysisSessionState = {
     fullScores: {},
     tasks: [],
     selectedResultId: null,
-    analyzing: false
+    analyzing: false,
+    analysisStartTime: null
 };
 
 export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions, modelConfigs }) => {
@@ -1045,6 +1047,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
     const tasks = currentSession.tasks;
     const selectedResultId = currentSession.selectedResultId;
     const analyzing = currentSession.analyzing;
+    const analysisStartTime = currentSession.analysisStartTime;
 
     // State Setters (wrapped to update current session)
     const setFile = (f: File | null) => setSession(prev => ({ ...prev, file: f }));
@@ -1064,6 +1067,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
     };
     const setSelectedResultId = (id: string | null) => setSession(prev => ({ ...prev, selectedResultId: id }));
     const setAnalyzing = (b: boolean) => setSession(prev => ({ ...prev, analyzing: b }));
+    const setAnalysisStartTime = (t: number | null) => setSession(prev => ({ ...prev, analysisStartTime: t }));
 
     const [uploading, setUploading] = useState(false);
     const [activeModelTab, setActiveModelTab] = useState<number>(0); // Store configId
@@ -1397,6 +1401,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
     const handleStartAnalysis = async () => {
         if (scoreData.length === 0 || questions.length === 0) return;
         setAnalyzing(true);
+        setAnalysisStartTime(Date.now());
         setTasks([]);
         setSelectedResultId(null);
 
@@ -1544,9 +1549,8 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                 .filter(t => t.status === 'pending' || t.status === 'processing')
                 .map(t => t.taskId);
                 
-            if (runningTaskIds.length > 0) {
-                await axios.post('http://127.0.0.1:8000/api/tasks/stop', runningTaskIds);
-            }
+            // Always call stop to purge backend queue, even if no tasks are tracked as running
+            await axios.post('http://127.0.0.1:8000/api/tasks/stop', runningTaskIds);
         } catch (error) {
             console.error("Failed to stop analysis", error);
             // alert("停止分析失败，请重试"); // Suppress alert for better UX on stop
@@ -1566,10 +1570,13 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
         const intervalId = setInterval(async () => {
             const updatedTasks = [...tasks];
             let changed = false;
+            let hasPending = false;
 
             for (let i = 0; i < updatedTasks.length; i++) {
                 const task = updatedTasks[i];
                 if (task.status === 'success' || task.status === 'failure') continue;
+                
+                hasPending = true;
 
                 try {
                     const res = await axios.get(`http://127.0.0.1:8000/api/tasks/${task.taskId}`);
@@ -1584,15 +1591,19 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                         }
                         changed = true;
                     } else if (status === 'FAILURE') {
-                        updatedTasks[i] = { ...task, status: 'failure', error: res.data.error };
+                        updatedTasks[i] = { ...task, status: 'failure', error: res.data.error || "任务执行失败" };
                         changed = true;
-                    } else if (status !== task.status) {
-                         // Map Celery status to our status
-                         updatedTasks[i] = { ...task, status: status === 'PENDING' ? 'pending' : 'processing' };
+                    } else if (status !== 'PENDING' && status !== 'PROCESSING') {
+                        // Handle revoked or other unknown states
+                         updatedTasks[i] = { ...task, status: 'failure', error: `未知状态: ${status}` };
+                         changed = true;
+                    } else if (task.status === 'pending' && status === 'PROCESSING') {
+                         updatedTasks[i] = { ...task, status: 'processing' };
                          changed = true;
                     }
                 } catch (e) {
-                    console.error("Poll error", e);
+                    console.error("Poll error for task", task.taskId, e);
+                    // Do not mark as failed immediately on network error, just retry next poll
                 }
             }
 
@@ -1600,18 +1611,64 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                 setTasks(updatedTasks);
             }
             
-            if (updatedTasks.every(t => t.status === 'success' || t.status === 'failure')) {
+            // Only stop analyzing if NO tasks are pending/processing AND we've completed a full pass
+            const stillPending = updatedTasks.some(t => t.status === 'pending' || t.status === 'processing');
+            if (!stillPending) {
                 setAnalyzing(false);
             }
 
-        }, 2000);
+        }, 3000); // Increase interval slightly to reduce load
 
         return () => clearInterval(intervalId);
     }, [tasks]);
 
     // --- Visualization Helpers ---
+    const [now, setNow] = useState(Date.now()); // Force update for timer
+    const [avgTimePerTask, setAvgTimePerTask] = useState<number>(0);
+
+    // Update 'now' every second to refresh timer
+    useEffect(() => {
+        if (!analyzing) return;
+        const timer = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(timer);
+    }, [analyzing]);
+
     const successCount = tasks.filter(t => t.status === 'success').length;
-    const progress = tasks.length > 0 ? (successCount / tasks.length) * 100 : 0;
+    const completedCount = tasks.filter(t => t.status === 'success' || t.status === 'failure').length;
+    const progress = tasks.length > 0 ? (completedCount / tasks.length) * 100 : 0;
+
+    // Update average time per task when a task completes
+    useEffect(() => {
+        if (completedCount > 0 && analysisStartTime) {
+            // Use current time as the "completion time" for the latest batch
+            const elapsed = (Date.now() - analysisStartTime) / 1000;
+            setAvgTimePerTask(elapsed / completedCount);
+        } else if (completedCount === 0) {
+            setAvgTimePerTask(0);
+        }
+    }, [completedCount, analysisStartTime]);
+    
+    // Estimate remaining time
+    const estimatedTimeRemaining = useMemo(() => {
+        if (!analysisStartTime) return null;
+        if (completedCount === tasks.length && tasks.length > 0) return null;
+        
+        // Show "Calculating..." if no tasks are completed yet but we are analyzing
+        if (completedCount === 0 || avgTimePerTask === 0) {
+            return "计算中...";
+        }
+        
+        // Calculate total expected duration based on fixed average time
+        const totalExpectedDuration = avgTimePerTask * tasks.length;
+        const elapsedTotal = (now - analysisStartTime) / 1000;
+        
+        // Remaining time = Total Expected - Elapsed
+        const remainingSeconds = Math.max(0, Math.round(totalExpectedDuration - elapsedTotal));
+        
+        if (remainingSeconds < 60) return `${remainingSeconds}秒`;
+        return `${Math.ceil(remainingSeconds / 60)}分钟`;
+    }, [completedCount, analysisStartTime, tasks.length, now, avgTimePerTask]);
+
 
     const classAverages = useMemo(() => {
         if (!scoreData || scoreData.length === 0) return undefined;
@@ -2433,10 +2490,17 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
             {/* Analysis Results Display */}
             {analyzing && (
                 <Box sx={{ mb: 4 }}>
-                     <Typography variant="subtitle1" gutterBottom>分析进度: {progress.toFixed(0)}%</Typography>
+                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', mb: 1 }}>
+                        <Typography variant="subtitle1">分析进度: {progress.toFixed(0)}%</Typography>
+                        {estimatedTimeRemaining && (
+                            <Typography variant="body2" color="primary">
+                                预计剩余时间: 约 {estimatedTimeRemaining}
+                            </Typography>
+                        )}
+                     </Box>
                      <LinearProgress variant="determinate" value={progress} />
                      <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>
-                         已完成: {successCount} / {tasks.length}
+                         已完成: {completedCount} / {tasks.length}
                      </Typography>
                 </Box>
             )}
