@@ -450,6 +450,14 @@ class LLMService:
                  # Basic validation for analysis modes
                  if not isinstance(data, dict):
                      raise ValueError("Response must be a JSON object")
+                
+
+                
+                 # Ensure markdown_report exists for multiple/single analysis modes
+                 # This fixes the issue where reports sometimes show as raw JSON
+                 if "markdown_report" not in data or not isinstance(data["markdown_report"], str) or not data["markdown_report"].strip():
+                     logger.warning(f"Missing or empty markdown_report in {mode}, generating fallback.")
+                     data["markdown_report"] = self._construct_markdown_from_data(data)
             
             return data
         except Exception as e:
