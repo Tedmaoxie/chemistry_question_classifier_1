@@ -1,5 +1,6 @@
 from typing import Dict, Any
 import json
+import json_repair
 import logging
 import datetime
 import re
@@ -10,7 +11,7 @@ logger = logging.getLogger(__name__)
 import os
 
 class LLMService:
-    def __init__(self, provider: str, api_key: str, base_url: str = None, model_name: str = None, temperature: float = 0.3, timeout: float = 600.0):
+    def __init__(self, provider: str, api_key: str, base_url: str = None, model_name: str = None, temperature: float = 0.3, timeout: float = 1800.0):
         self.provider = provider
         self.api_key = api_key
         self.base_url = base_url
@@ -308,30 +309,69 @@ class LLMService:
     def analyze_question(self, question_content: str, mode: str = "question_analysis") -> Dict[str, Any]:
         prompt = self._build_prompt(question_content, mode)
         
+        # Resolve model name to check for specific model types (e.g. deepseek-reasoner, glm-4.5)
+        resolved_model = self.model_name or self._get_model_name()
+        
+        start_time = datetime.datetime.now()
+        logger.info(f"Starting LLM analysis with provider={self.provider}, model={resolved_model}, timeout={self.timeout}s")
+        
         try:
             # Prepare request arguments
             create_kwargs = {
-                "model": self._get_model_name(),
+                "model": resolved_model,
                 "messages": [
                     {"role": "system", "content": "你是一位精通高中化学的教研专家。"},
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": self.temperature,
                 "max_tokens": 4000, 
-                "timeout": self.timeout
+                "timeout": self.timeout,
+                "stream": True  # Enable streaming globally to prevent gateway timeouts
             }
             
             # Conditionally add response_format
-            # Doubao (Volcengine) and Kimi may not support 'json_object' mode in current compatible API versions
-            if self.provider not in ["doubao", "kimi"]:
+            # 1. Doubao/Kimi: Known compatibility issues with strict JSON mode in some versions
+            # 2. deepseek-reasoner: Does NOT support response_format parameter
+            # 3. Zhipu (GLM-4): Supports json_object, but GLM-4.5's thinking mode might be safer without it initially
+            #    We enable it for Zhipu by default unless it's a specific conflicting model
+            if self.provider not in ["doubao", "kimi"] and "deepseek-reasoner" not in resolved_model:
                 create_kwargs["response_format"] = { "type": "json_object" }
 
-            # Explicitly set max_tokens to prevent truncation
-            # Some models default to a low number if not specified
-            response = self.client.chat.completions.create(**create_kwargs)
+            # --- Model Specific Configurations ---
             
-            result_text = response.choices[0].message.content
+            # Doubao (Volcengine)
+            if self.provider == "doubao":
+                 create_kwargs["max_tokens"] = 32000
+                 create_kwargs["extra_body"] = { "reasoning_effort": "medium" }
             
+            # DeepSeek Reasoner
+            if "deepseek-reasoner" in resolved_model:
+                 create_kwargs["max_tokens"] = 8000 # Reasoning models need more output space
+
+            # Zhipu AI (GLM)
+            if self.provider == "zhipu":
+                 # GLM-4.5 supports "thinking" parameter. 
+                 # "thinking": {"type": "enabled"} is default for GLM-4.5 but can be explicit.
+                 # We can add it if using GLM-4.5 specifically.
+                 if "glm-4.5" in resolved_model.lower():
+                     create_kwargs["extra_body"] = { "thinking": { "type": "enabled" } }
+
+            # Execute streaming request
+            stream = self.client.chat.completions.create(**create_kwargs)
+            
+            result_chunks = []
+            for chunk in stream:
+                # We collect the standard content. 
+                # Note: DeepSeek Reasoner & GLM-4.5's "thinking process" might be in separate fields
+                # We currently skip explicit reasoning/thinking content to ensure clean JSON parsing of the final answer.
+                if chunk.choices and chunk.choices[0].delta.content:
+                    result_chunks.append(chunk.choices[0].delta.content)
+            
+            result_text = "".join(result_chunks)
+            
+            duration = (datetime.datetime.now() - start_time).total_seconds()
+            logger.info(f"LLM request completed in {duration:.2f}s. Response length: {len(result_text)}")
+
             if not result_text:
                 raise ValueError("LLM returned empty response")
 

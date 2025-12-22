@@ -214,6 +214,7 @@ async def stop_tasks(task_ids: List[str] = Body(...)):
     Revoke (stop) a list of tasks.
     Also clears any pending tasks in the Celery queue.
     """
+    logger.info(f"Stopping tasks: received {len(task_ids)} IDs. Purging queue...")
     count = 0
     # 1. Revoke specific running/pending tasks
     for tid in task_ids:
