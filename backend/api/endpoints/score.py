@@ -76,9 +76,90 @@ def validate_class_data(df: pd.DataFrame) -> List[Dict]:
     # 新增：查找满分列
     f_col = find_col(['满分', 'full_score', 'total_score', 'max_score'])
     
+    # 新增：查找班级/分组列 (用于多班级/年级对比分析 - 竖表模式)
+    g_col = find_col(['班级', 'group', 'class_name', 'group_name', '组别', 'grade_name'])
+    
     # 避免误判：如果r_col也是题目列（例如“得分”既包含在“题目得分”也包含在“得分率”），需要更严格
     # 如果找到学生列，优先当作学生数据处理
     s_col = find_col(['姓名', '学号', 'student_id', 'name', 'student'])
+
+    # --- 宽表模式检测 (Wide Format) ---
+    # 场景：Q1, Full, GradeRate, Class1Rate, Class2Rate...
+    # 条件：找到题目列，没有学生列，且存在可能的“分组得分率”列
+    if q_col and not s_col:
+        # 排除已知的非得分列
+        known_cols = {q_col, f_col, g_col}
+        known_cols = {c for c in known_cols if c is not None}
+        
+        # 候选的得分率列 (排除已知列)
+        candidate_value_cols = [c for c in df.columns if c not in known_cols]
+        
+        # 筛选出数值类型的列 (或包含%的字符串)
+        valid_group_cols = []
+        for c in candidate_value_cols:
+            # 简单抽样检查前几行
+            sample_values = df[c].dropna().head(5)
+            if sample_values.empty:
+                continue
+                
+            is_numeric = False
+            try:
+                pd.to_numeric(sample_values)
+                is_numeric = True
+            except:
+                # Check for percentage strings
+                if sample_values.astype(str).str.contains('%').any():
+                    is_numeric = True
+            
+            if is_numeric:
+                valid_group_cols.append(c)
+        
+        # 判定逻辑：
+        # 1. 如果显式存在 g_col (班级列)，则优先走竖表逻辑 (Long Format)。
+        # 2. 如果没有 g_col，且有多个数值列 -> 宽表。
+        # 3. 如果没有 g_col，只有一个数值列，但列名不像"得分率" (即可能是班级名) -> 宽表。
+        
+        is_wide_format = False
+        if not g_col:
+            if len(valid_group_cols) > 1:
+                is_wide_format = True
+            elif len(valid_group_cols) == 1:
+                col_name = valid_group_cols[0]
+                # 检查列名是否是通用的"得分率"关键词
+                is_generic_name = any(k in str(col_name).lower() for k in ['得分率', '平均分', 'score_rate', 'rate', '得分'])
+                if not is_generic_name:
+                    is_wide_format = True
+
+        if is_wide_format:
+            # 执行宽表转竖表 (Melt)
+            # id_vars = [q_col, f_col] (if f_col exists)
+            id_vars = [q_col]
+            if f_col:
+                id_vars.append(f_col)
+                
+            # Melt
+            df_melted = pd.melt(
+                df, 
+                id_vars=id_vars, 
+                value_vars=valid_group_cols,
+                var_name='group_name', 
+                value_name='score_rate'
+            )
+            
+            # 更新关键列变量，以便后续逻辑复用
+            df = df_melted
+            q_col = q_col # Unchanged
+            r_col = 'score_rate'
+            g_col = 'group_name'
+            # f_col Unchanged
+            
+            # 重新清理列名 (Melt后列名是纯净的)
+            
+    # 1. 检查是否为聚合格式（只有题目和得分率）
+    # 注意：如果刚刚进行了宽表转换，这里就能承接上
+    # 如果没转换，尝试重新查找 r_col (因为前面可能没找到)
+    if not r_col:
+         r_col = find_col(['得分率', '平均分', 'score_rate', 'rate', '得分'])
 
     if q_col and r_col and not s_col:
         # 确实是聚合数据
@@ -106,6 +187,8 @@ def validate_class_data(df: pd.DataFrame) -> List[Dict]:
         rename_map = {q_col: 'question_id', r_col: 'score_rate'}
         if f_col != 'full_score':
             rename_map[f_col] = 'full_score'
+        if g_col:
+            rename_map[g_col] = 'group_name'
             
         df = df.rename(columns=rename_map)
         
@@ -135,7 +218,13 @@ def validate_class_data(df: pd.DataFrame) -> List[Dict]:
         else:
             df['average_score'] = None
 
-        return df[['question_id', 'score_rate', 'full_score', 'average_score']].to_dict(orient='records')
+        cols_to_return = ['question_id', 'score_rate', 'full_score', 'average_score']
+        if 'group_name' in df.columns:
+            cols_to_return.append('group_name')
+            # Ensure group_name is string
+            df['group_name'] = df['group_name'].astype(str)
+
+        return df[cols_to_return].to_dict(orient='records')
         
     # 2. 检查是否为学生原始数据（需要聚合计算）
     if s_col:
@@ -230,13 +319,25 @@ def validate_student_data(df: pd.DataFrame) -> Dict[str, Any]:
     if not s_col:
         raise ValueError(f"无法识别学生标识列。请确保包含'姓名'或'学号'列。当前列: {list(df.columns)}")
     
+    # 1.5 Identify Class Identifier column (Optional but recommended)
+    c_col = find_col(['班级', 'class_id', 'class', 'grade_class'])
+
     # 2. Identify Question Columns (all other columns)
-    q_cols = [c for c in df.columns if c != s_col]
+    # Exclude student column and class column
+    exclude_cols = [s_col]
+    if c_col:
+        exclude_cols.append(c_col)
+        
+    q_cols = [c for c in df.columns if c not in exclude_cols]
     if not q_cols:
         raise ValueError("未找到题目得分列。")
         
-    # Rename student column
-    df = df.rename(columns={s_col: 'student_id'})
+    # Rename columns
+    rename_map = {s_col: 'student_id'}
+    if c_col:
+        rename_map[c_col] = 'class_id'
+    
+    df = df.rename(columns=rename_map)
     
     full_scores = {}
     

@@ -490,10 +490,65 @@ def perform_score_analysis_sync(score_data: Union[List, Dict], question_data: Li
     stats = {}
     student_topic_stats = None
     student_ability_stats = None
+    
+    # Context variables for Class Mode
+    groups = {}
+    has_groups = False
+    main_group_name = 'Default'
+    comparative_context = ""
 
     try:
         if mode == 'class':
-            stats = calculate_class_stats(score_data, q_map)
+            # Check for groups (Multi-Class Analysis)
+            # score_data is a list of records
+            if isinstance(score_data, list):
+                for item in score_data:
+                    g_name = str(item.get('group_name', '')).strip()
+                    if g_name and g_name.lower() != 'nan' and g_name.lower() != 'none':
+                        has_groups = True
+                        if g_name not in groups: groups[g_name] = []
+                        groups[g_name].append(item)
+                    else:
+                        if 'Default' not in groups: groups['Default'] = []
+                        groups['Default'].append(item)
+            else:
+                 # Should not happen for class mode based on validation, but safe fallback
+                 groups['Default'] = [score_data] if isinstance(score_data, dict) else []
+
+            # Determine Main Group for Standard Stats (Charts)
+            # Priority: "Grade" > "Total" > "All" > First Group
+            if has_groups:
+                keys = list(groups.keys())
+                main_group_name = keys[0]
+                for k in keys:
+                    if any(x in k for x in ['年级', 'Grade', 'Total', '全体', '汇总']):
+                        main_group_name = k
+                        break
+            
+            # Calculate stats for the main group (to be used in charts/standard fields)
+            stats = calculate_class_stats(groups.get(main_group_name, []), q_map)
+            
+            # Prepare Comparative Context if multiple groups exist
+            if has_groups and len(groups) > 1:
+                comparative_context = "\n\n【多维度对比数据】\n"
+                # Sort group names naturally (A1, A2, A10... instead of A1, A10, A2)
+                for g_name in sorted(groups.keys(), key=natural_sort_key):
+                    g_data = groups[g_name]
+                    g_stats = calculate_class_stats(g_data, q_map)
+                    # Summary string: L1: 80%, L2: 70%...
+                    summary = ", ".join([f"{l}: {s['avg_rate']}%" for l, s in g_stats.items() if s['count']>0])
+                    comparative_context += f"\n>>> 分组：{g_name}\n总体表现：{summary}\n"
+                    
+                    # Add detailed question scores
+                    g_scores = []
+                    # Sort by question ID for consistency
+                    g_data_sorted = sorted(g_data, key=lambda x: str(x.get('question_id')))
+                    for item in g_data_sorted:
+                        qid = item.get('question_id')
+                        rate = item.get('score_rate')
+                        g_scores.append(f"{qid}:{rate}")
+                    comparative_context += f"题目得分率：{', '.join(g_scores)}\n"
+
         else:
             # Student Mode
             student_topic_stats = calculate_student_topic_stats(score_data, q_map)
@@ -517,19 +572,69 @@ def perform_score_analysis_sync(score_data: Union[List, Dict], question_data: Li
         
         # Construct Input String
         q_context = json.dumps(question_data, ensure_ascii=False)
-        score_context = json.dumps(score_data, ensure_ascii=False)
         
         if mode == 'class':
-            stats_summary = json.dumps(stats, ensure_ascii=False)
-            input_data = f"题目难度数据：\n{q_context}\n\n全年级得分率数据：\n{score_context}\n\n(参考统计：各难度平均得分率 {stats_summary})"
-        else:
-            input_data = f"题目难度数据：\n{q_context}\n\n学生个人数据：\n{score_context}"
+            # Multi-Group Analysis (Grade + Classes)
+            # We will generate a separate report for EACH group
+            final_results = {}
+            
+            # 1. Identify Groups
+            # Ensure 'Grade' or main group is first
+            group_names = sorted(groups.keys(), key=natural_sort_key)
+            if main_group_name in group_names:
+                group_names.remove(main_group_name)
+                group_names.insert(0, main_group_name)
+            
+            for g_name in group_names:
+                g_data = groups[g_name]
+                g_stats = calculate_class_stats(g_data, q_map)
+                stats_summary = json.dumps(g_stats, ensure_ascii=False)
+                score_context = json.dumps(g_data, ensure_ascii=False)
+                
+                # Construct Prompt for Single Group Analysis (using Collective Prompt structure)
+                # We treat each group as a "Collective Unit"
+                input_data = f"题目难度数据：\n{q_context}\n\n当前分析对象（{g_name}）得分率数据：\n{score_context}\n\n(参考统计 - {g_name}：{stats_summary})\n\n请对该对象进行【集体学情分析】。请忽略提示词中关于'全年级'和'各班'对比的要求，专注于分析当前提供的这份数据。"
+                
+                try:
+                    # Use 'multiple_analysis' mode but guide it to focus on single group
+                    res = llm.analyze_question(input_data, mode="multiple_analysis")
+                    
+                    # Post-correction for this group
+                    res = correct_result(res, g_stats, q_map, mode, None, None)
+                    
+                    final_results[g_name] = res
+                except Exception as e:
+                    logger.error(f"Analysis failed for group {g_name}: {e}")
+                    final_results[g_name] = {
+                        "总体分析": {"各等级得分率分析": {}, "综合评价": f"分析失败: {str(e)}"},
+                        "能力短板诊断": [],
+                        "markdown_report": f"# {g_name} 分析失败\n\n{str(e)}"
+                    }
+            
+            # Return the map of results
+            return final_results
 
-        # Map mode to LLMService mode
-        llm_mode = "multiple_analysis" if mode == "class" else "single_analysis"
-        
-        # 2. Call LLM
-        result = llm.analyze_question(input_data, mode=llm_mode)
+        else:
+            # Student Mode (Single Analysis)
+            score_context = json.dumps(score_data, ensure_ascii=False)
+            input_data = f"题目难度数据：\n{q_context}\n\n学生个人数据：\n{score_context}"
+            
+            # Map mode to LLMService mode
+            llm_mode = "single_analysis"
+            
+            # Call LLM
+            result = llm.analyze_question(input_data, mode=llm_mode)
+            
+            # Post-correction
+            result = correct_result(
+                result, 
+                stats, 
+                q_map, 
+                mode, 
+                student_topic_stats,
+                student_ability_stats
+            )
+            return result
         
     except Exception as e:
         logger.error(f"Score analysis LLM failed: {e}")
@@ -561,6 +666,13 @@ def perform_score_analysis_sync(score_data: Union[List, Dict], question_data: Li
         logger.error(f"Result correction failed: {e}")
         
     return result
+
+def natural_sort_key(s):
+    """
+    Natural sort key for strings containing numbers (e.g., "A1", "A2", "A10").
+    """
+    return [int(text) if text.isdigit() else text.lower()
+            for text in re.split('([0-9]+)', str(s))]
 
 @shared_task(bind=True)
 def analyze_score_task(self, score_data: Union[List, Dict], question_data: List[Dict], mode: str, config: Dict[str, Any]):

@@ -2,7 +2,7 @@ import os
 
 class Settings:
     PROJECT_NAME: str = "Chemistry Question Classifier"
-    PROJECT_VERSION: str = "1.1.0"
+    PROJECT_VERSION: str = "1.2.0"
     API_PREFIX: str = "/api"
     # Update ALLOWED_ORIGINS to allow all for development or ensure correct formatting
     ALLOWED_ORIGINS: list = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"]
