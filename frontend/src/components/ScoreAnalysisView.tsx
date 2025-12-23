@@ -2256,8 +2256,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
                 
                 // Skip tasks that are still being prepared (temporary IDs)
                 if (task.taskId && task.taskId.startsWith('preparing_')) continue;
-                
-                hasPending = true;
+
 
                 try {
                     const res = await axios.get(`http://127.0.0.1:8000/api/tasks/${task.taskId}`);
