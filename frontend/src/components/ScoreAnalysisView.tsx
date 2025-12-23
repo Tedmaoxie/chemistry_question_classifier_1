@@ -2250,8 +2250,6 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
         const intervalId = setInterval(async () => {
             const updatedTasks = [...tasks];
             let changed = false;
-            let hasPending = false;
-
             for (let i = 0; i < updatedTasks.length; i++) {
                 const task = updatedTasks[i];
                 if (task.status === 'success' || task.status === 'failure') continue;
