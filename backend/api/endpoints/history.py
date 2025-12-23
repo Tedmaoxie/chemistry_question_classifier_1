@@ -133,10 +133,6 @@ async def delete_history(history_id: str, background_tasks: BackgroundTasks):
             except FileNotFoundError:
                 break
             
-        # Trigger Git sync in background
-        commit_msg = f"Delete history record: {history_id}"
-        background_tasks.add_task(_git_sync, commit_msg)
-        
         return {"status": "success", "id": history_id}
     except HTTPException:
         raise

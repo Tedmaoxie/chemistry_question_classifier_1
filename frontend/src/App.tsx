@@ -1133,8 +1133,6 @@ function App() {
           
           for (let i = 0; i < questions.length; i += BATCH_SIZE) {
               const chunk = questions.slice(i, i + BATCH_SIZE);
-              const chunkIndex = Math.floor(i / BATCH_SIZE) + 1;
-              const totalChunks = Math.ceil(questions.length / BATCH_SIZE);
               
               setExportProgress(`处理中 ${i + 1}/${questions.length}...`);
 

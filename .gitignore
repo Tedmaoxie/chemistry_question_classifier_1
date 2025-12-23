@@ -60,3 +60,5 @@ celerybeat-schedule
 backend/.env
 backend/venv/
 backend/__pycache__/
+*.rdb
+data/history/
