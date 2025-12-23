@@ -1486,7 +1486,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
     const [originalHeaders, setOriginalHeaders] = useState<string[]>([]);
     const [headerMap, setHeaderMap] = useState<Record<string, string>>({}); // Original -> Qx (system ID)
 
-    const handleChangePage = (event: unknown, newPage: number) => {
+    const handleChangePage = (_event: unknown, newPage: number) => {
         setPage(newPage);
     };
 
@@ -2374,7 +2374,6 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
         return () => clearInterval(timer);
     }, [analyzing]);
 
-    const successCount = tasks.filter(t => t.status === 'success').length;
     const completedCount = tasks.filter(t => t.status === 'success' || t.status === 'failure').length;
     const progress = tasks.length > 0 ? (completedCount / tasks.length) * 100 : 0;
 
