@@ -1281,7 +1281,7 @@ function App() {
           <Typography variant="h5" component="div" sx={{ flexGrow: 1, fontWeight: 700, letterSpacing: 0.5 }}>
             AI赋能高中化学教学系列by实验中学
           </Typography>
-          <Chip label="v1.1" color="secondary" size="small" sx={{ fontWeight: 'bold' }} />
+          <Chip label="v1.2" color="secondary" size="small" sx={{ fontWeight: 'bold' }} />
         </Toolbar>
       </AppBar>
 

@@ -20,6 +20,23 @@ def run():
         if getattr(sys, 'frozen', False):
             base_dir = os.path.dirname(sys.executable)
         
+        # Load .env manually if exists (for desktop user convenience)
+        env_path = os.path.join(base_dir, ".env")
+        if os.path.exists(env_path):
+            print(f"Loading environment from {env_path}")
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"): continue
+                        if "=" in line:
+                            k, v = line.split("=", 1)
+                            # Do not overwrite system env vars if already set
+                            if k.strip() not in os.environ:
+                                os.environ[k.strip()] = v.strip('"\'')
+            except Exception as e:
+                print(f"Warning: Failed to load .env file: {e}")
+
         # We already added to sys.path above, but let's double check for runtime safety
         if base_dir not in sys.path:
             sys.path.insert(0, base_dir)
@@ -55,6 +72,18 @@ def run():
              
         # 4. Run Server
         print("Starting server on http://127.0.0.1:8000...")
+        
+        # Open browser automatically
+        import webbrowser
+        import threading
+        
+        def open_browser():
+            import time
+            time.sleep(1.5) # Wait for server to start
+            webbrowser.open("http://127.0.0.1:8000/")
+            
+        threading.Thread(target=open_browser, daemon=True).start()
+
         # reload=False is important for frozen app
         uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info", reload=False)
         

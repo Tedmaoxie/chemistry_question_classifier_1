@@ -618,9 +618,16 @@ class LLMService:
     def _build_prompt(self, question: str, mode: str = "question_analysis") -> str:
         # In a real app, we might cache this content
         try:
-            # Use absolute path to ensure file is found regardless of CWD
-            # Fixed filename to match actual file on disk
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            # Determine project root based on runtime environment
+            import sys
+            if getattr(sys, 'frozen', False):
+                # Running as PyInstaller bundle (frozen)
+                # sys.executable points to the .exe file
+                project_root = os.path.dirname(sys.executable)
+            else:
+                # Running as script (dev)
+                # Use absolute path to ensure file is found regardless of CWD
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             
             if mode == "multiple_analysis":
                 file_name = "multiple_analysis_API.md"

@@ -58,6 +58,20 @@ async def run_single_model_background(task_id: str, question_data: Dict[str, Any
         MEMORY_TASKS[task_id]["status"] = "FAILURE"
         MEMORY_TASKS[task_id]["error"] = str(e)
 
+import os
+import threading
+
+def run_analysis_in_thread(task_id: str, question_data: Dict[str, Any], config: Dict[str, Any]):
+    try:
+        MEMORY_TASKS[task_id]["status"] = "PROCESSING"
+        result = perform_single_model_analysis(question_data, config)
+        MEMORY_TASKS[task_id]["status"] = "SUCCESS"
+        MEMORY_TASKS[task_id]["result"] = result
+    except Exception as e:
+        logger.error(f"Thread task failed: {e}")
+        MEMORY_TASKS[task_id]["status"] = "FAILURE"
+        MEMORY_TASKS[task_id]["error"] = str(e)
+
 @router.post("/analyze")
 async def start_analysis(request: AnalysisRequest, background_tasks: BackgroundTasks):
     """
@@ -79,12 +93,14 @@ async def start_analysis(request: AnalysisRequest, background_tasks: BackgroundT
     use_fallback = False
     
     # Check Redis connection once (simple check)
-    try:
-        # Assuming we can just try dispatching the first task. 
-        # But to be safe, we can try to ping or just rely on exception handling.
-        pass
-    except:
-        pass
+    # If running desktop, force skipping Redis check and rely on Eager mode handling
+    if os.environ.get("RUNNING_DESKTOP") != "true":
+        try:
+            # Assuming we can just try dispatching the first task. 
+            # But to be safe, we can try to ping or just rely on exception handling.
+            pass
+        except:
+            pass
 
     for q in questions:
         q_id = q.get("id")
@@ -95,11 +111,48 @@ async def start_analysis(request: AnalysisRequest, background_tasks: BackgroundT
             
             task_id = None
             
+            # Desktop Mode: Use Threads for true parallelism (avoids blocking main thread)
+            if os.environ.get("RUNNING_DESKTOP") == "true":
+                task_id = str(uuid.uuid4())
+                MEMORY_TASKS[task_id] = {"status": "PENDING"}
+                
+                thread = threading.Thread(
+                    target=run_analysis_in_thread,
+                    args=(task_id, q, config)
+                )
+                thread.daemon = True # Ensure threads don't block app exit
+                thread.start()
+                
+                model_tasks[label] = task_id
+                continue # Skip the rest of the loop for this config
+
             if not use_fallback:
                 try:
                     # Attempt to dispatch to Celery
                     task = analyze_single_model_task.delay(q, config)
                     task_id = task.id
+                    
+                    # Handle Desktop/Eager mode:
+                    # In eager mode, the task is already finished, but the result is not in Redis.
+                    # We MUST manually store it in MEMORY_TASKS so the status endpoint can find it.
+                    if os.environ.get("RUNNING_DESKTOP") == "true":
+                         # task is an EagerResult
+                         status = task.status # 'SUCCESS', 'FAILURE', etc.
+                         # EagerResult.result is the return value (or exception instance)
+                         result_val = task.result
+                         
+                         task_info = {
+                             "status": status
+                         }
+                         
+                         if status == "SUCCESS":
+                             task_info["result"] = result_val
+                         elif status == "FAILURE":
+                             task_info["error"] = str(result_val)
+                             
+                         MEMORY_TASKS[task_id] = task_info
+                         logger.info(f"Desktop mode: Cached eager task {task_id} result in memory.")
+
                 except Exception as e:
                     logger.warning(f"Celery dispatch failed: {e}. Switching to in-memory fallback.")
                     use_fallback = True

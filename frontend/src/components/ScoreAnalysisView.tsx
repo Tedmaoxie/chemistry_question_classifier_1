@@ -1570,14 +1570,11 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
         const intervalId = setInterval(async () => {
             const updatedTasks = [...tasks];
             let changed = false;
-            let hasPending = false;
 
             for (let i = 0; i < updatedTasks.length; i++) {
                 const task = updatedTasks[i];
                 if (task.status === 'success' || task.status === 'failure') continue;
                 
-                hasPending = true;
-
                 try {
                     const res = await axios.get(`http://127.0.0.1:8000/api/tasks/${task.taskId}`);
                     const status = res.data.status; // PENDING, PROCESSING, SUCCESS, FAILURE
@@ -1633,7 +1630,6 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
         return () => clearInterval(timer);
     }, [analyzing]);
 
-    const successCount = tasks.filter(t => t.status === 'success').length;
     const completedCount = tasks.filter(t => t.status === 'success' || t.status === 'failure').length;
     const progress = tasks.length > 0 ? (completedCount / tasks.length) * 100 : 0;
 
