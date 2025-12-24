@@ -25,7 +25,13 @@ app = FastAPI(
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Allow all for now to avoid CORS issues in Space
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost",
+    ], # Allow specific origins for CORS with credentials
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,8 +42,15 @@ app.include_router(api_router, prefix=settings.API_PREFIX)
 
 # Serve Frontend Static Files
 # Mount /assets to frontend/dist/assets
-# Ensure the path is correct relative to where uvicorn is run
-frontend_dist_path = os.path.join(os.getcwd(), "frontend", "dist")
+# Ensure the path is correct relative to where uvicorn is run or executable location
+if getattr(sys, 'frozen', False):
+    # Running as PyInstaller bundle
+    base_dir = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+else:
+    # Running as script
+    base_dir = os.getcwd()
+
+frontend_dist_path = os.path.join(base_dir, "frontend", "dist")
 
 if os.path.exists(frontend_dist_path):
     app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist_path, "assets")), name="assets")

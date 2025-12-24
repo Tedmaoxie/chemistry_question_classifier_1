@@ -501,27 +501,86 @@ def perform_score_analysis_sync(score_data: Union[List, Dict], question_data: Li
         if mode == 'class':
             # Check for groups (Multi-Class Analysis)
             # score_data is a list of records
-            if isinstance(score_data, list):
+            
+            first_row = score_data[0] if isinstance(score_data, list) and score_data else {}
+            
+            # Check if data is already in Long Format (Melted) - sent by frontend multi-group logic
+            is_melted = 'group_name' in first_row and 'score_rate' in first_row
+            
+            if is_melted:
+                # Handle Melted Data
                 for item in score_data:
-                    g_name = str(item.get('group_name', '')).strip()
-                    if g_name and g_name.lower() != 'nan' and g_name.lower() != 'none':
-                        has_groups = True
-                        if g_name not in groups: groups[g_name] = []
-                        groups[g_name].append(item)
-                    else:
-                        if 'Default' not in groups: groups['Default'] = []
-                        groups['Default'].append(item)
+                    g_name = item.get('group_name')
+                    if g_name:
+                        if g_name not in groups:
+                            groups[g_name] = []
+                        
+                        # Ensure numeric score_rate
+                        try:
+                            val = item.get('score_rate')
+                            val_f = float(val)
+                            if val_f > 1.05: val_f = val_f / 100.0
+                            elif val_f < 0: val_f = 0
+                            
+                            new_item = item.copy()
+                            new_item['score_rate'] = val_f
+                            groups[g_name].append(new_item)
+                        except:
+                            groups[g_name].append(item)
+                            
+                has_groups = len(groups) > 0
             else:
-                 # Should not happen for class mode based on validation, but safe fallback
-                 groups['Default'] = [score_data] if isinstance(score_data, dict) else []
+                # Handle Wide Format (Existing Logic)
+                # Structure: [{question_id: 1, score_rate: 0.85, Class1: 0.80, Class2: 0.90}, ...]
+                
+                exclude_keys = ['question_id', 'full_score', 'average_score', 'id', 'meta', 'analysis', 'student_id', '姓名', '学号', 'name', 'class', '班级', 'class_id']
+                
+                # Find all keys that are likely groups
+                # Note: 'score_rate' is usually the main group (Grade) if renamed by validator
+                potential_groups = [k for k in first_row.keys() if k not in exclude_keys]
+                
+                # Also check if 'score_rate' exists and treat it as 'Grade' or 'Total'
+                if 'score_rate' in first_row:
+                    # Only append score_rate if no other Grade-like column is found to avoid duplication
+                    # Common grade keys: Grade, 年级, Overall, 全体, 总体, Total
+                    has_grade_col = any(k for k in potential_groups if any(x in str(k) for x in ['Grade', '年级', 'Overall', '全体', '总体', 'Total']))
+                    
+                    if not has_grade_col:
+                        potential_groups.append('score_rate')
+                    
+                has_groups = len(potential_groups) > 0
+                
+                if has_groups:
+                    for g_name in potential_groups:
+                        # Build list of {question_id, score_rate} for this group
+                        g_list = []
+                        for item in score_data:
+                            val = item.get(g_name)
+                            if val is not None:
+                                try:
+                                    # Convert to float
+                                    val_f = float(val)
+                                    # Normalize to 0-1
+                                    if val_f > 1.05: val_f = val_f / 100.0
+                                    elif val_f < 0: val_f = 0
+                                    
+                                    g_list.append({
+                                        "question_id": item.get("question_id"),
+                                        "score_rate": val_f,
+                                        "group_name": g_name # Marker
+                                    })
+                                except:
+                                    pass
+                        if g_list:
+                            groups[g_name] = g_list
 
             # Determine Main Group for Standard Stats (Charts)
-            # Priority: "Grade" > "Total" > "All" > First Group
+            # Priority: "score_rate" (renamed Grade) > "Grade" > "Total" > First Group
             if has_groups:
                 keys = list(groups.keys())
                 main_group_name = keys[0]
                 for k in keys:
-                    if any(x in k for x in ['年级', 'Grade', 'Total', '全体', '汇总']):
+                    if k == 'score_rate' or any(x in k for x in ['年级', 'Grade', 'Total', '全体', '汇总']):
                         main_group_name = k
                         break
             

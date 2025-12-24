@@ -450,6 +450,14 @@ class LLMService:
                  # Basic validation for analysis modes
                  if not isinstance(data, dict):
                      raise ValueError("Response must be a JSON object")
+                
+
+                
+                 # Ensure markdown_report exists for multiple/single analysis modes
+                 # This fixes the issue where reports sometimes show as raw JSON
+                 if "markdown_report" not in data or not isinstance(data["markdown_report"], str) or not data["markdown_report"].strip():
+                     logger.warning(f"Missing or empty markdown_report in {mode}, generating fallback.")
+                     data["markdown_report"] = self._construct_markdown_from_data(data)
             
             return data
         except Exception as e:
@@ -610,9 +618,16 @@ class LLMService:
     def _build_prompt(self, question: str, mode: str = "question_analysis") -> str:
         # In a real app, we might cache this content
         try:
-            # Use absolute path to ensure file is found regardless of CWD
-            # Fixed filename to match actual file on disk
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            # Determine project root based on runtime environment
+            import sys
+            if getattr(sys, 'frozen', False):
+                # Running as PyInstaller bundle (frozen)
+                # sys._MEIPASS points to the bundle directory where datas are extracted/located
+                project_root = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+            else:
+                # Running as script (dev)
+                # Use absolute path to ensure file is found regardless of CWD
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             
             if mode == "multiple_analysis":
                 file_name = "multiple_analysis_API.md"

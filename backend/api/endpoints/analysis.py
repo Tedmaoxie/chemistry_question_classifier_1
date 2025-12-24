@@ -7,6 +7,7 @@ from backend.tasks.analysis import analyze_question_task, analyze_single_model_t
 from backend.celery_app import celery_app
 import uuid
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,12 @@ async def start_analysis(request: AnalysisRequest, background_tasks: BackgroundT
         pass
     except:
         pass
+
+    # Force fallback to in-memory BackgroundTasks if running in Desktop mode
+    # This avoids blocking on Celery eager execution
+    if os.environ.get("RUNNING_DESKTOP") == "true":
+        use_fallback = True
+        logger.info("Desktop mode detected: Using in-memory BackgroundTasks for analysis.")
 
     for q in questions:
         q_id = q.get("id")

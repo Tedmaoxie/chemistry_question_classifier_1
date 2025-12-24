@@ -76,90 +76,32 @@ def validate_class_data(df: pd.DataFrame) -> List[Dict]:
     # 新增：查找满分列
     f_col = find_col(['满分', 'full_score', 'total_score', 'max_score'])
     
-    # 新增：查找班级/分组列 (用于多班级/年级对比分析 - 竖表模式)
-    g_col = find_col(['班级', 'group', 'class_name', 'group_name', '组别', 'grade_name'])
-    
     # 避免误判：如果r_col也是题目列（例如“得分”既包含在“题目得分”也包含在“得分率”），需要更严格
     # 如果找到学生列，优先当作学生数据处理
     s_col = find_col(['姓名', '学号', 'student_id', 'name', 'student'])
 
-    # --- 宽表模式检测 (Wide Format) ---
-    # 场景：Q1, Full, GradeRate, Class1Rate, Class2Rate...
-    # 条件：找到题目列，没有学生列，且存在可能的“分组得分率”列
-    if q_col and not s_col:
-        # 排除已知的非得分列
-        known_cols = {q_col, f_col, g_col}
-        known_cols = {c for c in known_cols if c is not None}
+    # --- 智能修正：宽表聚合数据支持 ---
+    # 场景：用户上传了 [题号, 满分, 年级, 班级1, 班级2...]
+    # 此时 q_col, f_col 存在，但 r_col (得分率) 可能未识别（因为列名是 Grade 或 ClassA）
+    # 且 s_col 不存在
+    if q_col and not r_col and not s_col:
+        # 排除已识别的列
+        excluded = [q_col]
+        if f_col: excluded.append(f_col)
         
-        # 候选的得分率列 (排除已知列)
-        candidate_value_cols = [c for c in df.columns if c not in known_cols]
+        potential_cols = [c for c in df.columns if c not in excluded]
         
-        # 筛选出数值类型的列 (或包含%的字符串)
-        valid_group_cols = []
-        for c in candidate_value_cols:
-            # 简单抽样检查前几行
-            sample_values = df[c].dropna().head(5)
-            if sample_values.empty:
-                continue
-                
-            is_numeric = False
-            try:
-                pd.to_numeric(sample_values)
-                is_numeric = True
-            except:
-                # Check for percentage strings
-                if sample_values.astype(str).str.contains('%').any():
-                    is_numeric = True
+        if potential_cols:
+            # 1. 优先寻找代表“整体/年级”的列
+            priority_keywords = ['grade', '年级', 'total', '总体', 'average', '平均', 'all']
+            target_col = next((c for c in potential_cols if any(k in str(c).lower() for k in priority_keywords)), None)
             
-            if is_numeric:
-                valid_group_cols.append(c)
-        
-        # 判定逻辑：
-        # 1. 如果显式存在 g_col (班级列)，则优先走竖表逻辑 (Long Format)。
-        # 2. 如果没有 g_col，且有多个数值列 -> 宽表。
-        # 3. 如果没有 g_col，只有一个数值列，但列名不像"得分率" (即可能是班级名) -> 宽表。
-        
-        is_wide_format = False
-        if not g_col:
-            if len(valid_group_cols) > 1:
-                is_wide_format = True
-            elif len(valid_group_cols) == 1:
-                col_name = valid_group_cols[0]
-                # 检查列名是否是通用的"得分率"关键词
-                is_generic_name = any(k in str(col_name).lower() for k in ['得分率', '平均分', 'score_rate', 'rate', '得分'])
-                if not is_generic_name:
-                    is_wide_format = True
-
-        if is_wide_format:
-            # 执行宽表转竖表 (Melt)
-            # id_vars = [q_col, f_col] (if f_col exists)
-            id_vars = [q_col]
-            if f_col:
-                id_vars.append(f_col)
-                
-            # Melt
-            df_melted = pd.melt(
-                df, 
-                id_vars=id_vars, 
-                value_vars=valid_group_cols,
-                var_name='group_name', 
-                value_name='score_rate'
-            )
+            # 2. 如果没找到，默认取第一列（通常紧跟在满分列后面的是年级数据）
+            if not target_col:
+                target_col = potential_cols[0]
             
-            # 更新关键列变量，以便后续逻辑复用
-            df = df_melted
-            q_col = q_col # Unchanged
-            r_col = 'score_rate'
-            g_col = 'group_name'
-            # f_col Unchanged
-            
-            # 重新清理列名 (Melt后列名是纯净的)
-            
-    # 1. 检查是否为聚合格式（只有题目和得分率）
-    # 注意：如果刚刚进行了宽表转换，这里就能承接上
-    # 如果没转换，尝试重新查找 r_col (因为前面可能没找到)
-    if not r_col:
-         r_col = find_col(['得分率', '平均分', 'score_rate', 'rate', '得分'])
+            r_col = target_col
+            # logger.info(f"Auto-detected score rate column: {r_col}")
 
     if q_col and r_col and not s_col:
         # 确实是聚合数据
@@ -184,13 +126,27 @@ def validate_class_data(df: pd.DataFrame) -> List[Dict]:
             raise ValueError("数据中缺少满分列。请确保包含'满分'、'full_score'或'max_score'列。")
 
         # 重命名为统一的键名
-        rename_map = {q_col: 'question_id', r_col: 'score_rate'}
+        rename_map = {q_col: 'question_id'}
         if f_col != 'full_score':
             rename_map[f_col] = 'full_score'
-        if g_col:
-            rename_map[g_col] = 'group_name'
             
         df = df.rename(columns=rename_map)
+        
+        # 处理得分率列 (保留原列名用于展示，同时创建标准 score_rate 列用于分析)
+        # 如果原列名已经是 score_rate，则无需复制
+        if r_col == 'score_rate':
+            pass
+        elif r_col in ['得分率', '平均分', 'rate']:
+             # 常见中文名，直接重命名为 score_rate 以避免混淆
+             df = df.rename(columns={r_col: 'score_rate'})
+        else:
+             # 特殊列名 (如 Grade, Year 1)，保留原列，并复制一份作为 score_rate
+             # 确保原列也是数值型
+             try:
+                 df[r_col] = pd.to_numeric(df[r_col])
+             except:
+                 pass
+             df['score_rate'] = df[r_col]
         
         # 确保 score_rate 是 0-1 之间的小数 (如果是百分数则转换)
         # 启发式判断：如果均值 > 1，则认为是百分制或原始分
@@ -212,69 +168,125 @@ def validate_class_data(df: pd.DataFrame) -> List[Dict]:
         if df['score_rate'].max() > 1.05: # 允许少量误差
              raise ValueError("计算后的得分率超过 100%，请检查数据")
 
+        # 同步回原列：如果 score_rate 是从 Grade/年级 等列派生来的，
+        # 将归一化后的值 (0-1) 写回原列，以便前端数据预览能显示正确的得分率数值
+        if r_col and r_col != 'score_rate' and r_col in df.columns:
+            df[r_col] = df['score_rate']
+
+        # 尝试将其他可能的班级列也转换为数值 (Auto-convert other columns to numeric)
+        # 排除已知非数值列
+        known_cols = ['question_id', 'full_score', 'score_rate', 'average_score', '题号', '题目', '满分']
+        if r_col: known_cols.append(r_col)
+        
+        for col in df.columns:
+            if col not in known_cols and col not in rename_map.values():
+                # 尝试转换，如果大部分是数字
+                try:
+                    # 先尝试转 numeric
+                    s_numeric = pd.to_numeric(df[col], errors='coerce')
+                    if s_numeric.notna().sum() / len(s_numeric) > 0.5:
+                        # 这是一个数值列（可能是其他班级）
+                        # 检查是否需要归一化 (类似 score_rate)
+                         if s_numeric.mean() > 1 and df['full_score'].notna().all():
+                             # 假设规则相同：如果 > 1 且 <= 满分 -> / full_score; 如果 > full_score -> / 100
+                             is_percent = (s_numeric > df['full_score']).any()
+                             if is_percent:
+                                 df[col] = s_numeric / 100.0
+                             else:
+                                 df[col] = s_numeric / df['full_score']
+                         else:
+                             df[col] = s_numeric
+                except:
+                    pass
+
         # 计算平均分 (均分 = 满分 * 得分率)
         if df['full_score'].notna().all():
             df['average_score'] = df['full_score'] * df['score_rate']
         else:
             df['average_score'] = None
 
-        cols_to_return = ['question_id', 'score_rate', 'full_score', 'average_score']
-        if 'group_name' in df.columns:
-            cols_to_return.append('group_name')
-            # Ensure group_name is string
-            df['group_name'] = df['group_name'].astype(str)
-
-        return df[cols_to_return].to_dict(orient='records')
+        # Return all columns to support wide-table format (multiple classes)
+        # Ensure we don't return NaN as JSON standard doesn't support it (replace with None or 0)
+        return df.where(pd.notnull(df), None).to_dict(orient='records')
         
     # 2. 检查是否为学生原始数据（需要聚合计算）
     if s_col:
+        # 识别班级列，避免将其误认为题目
+        c_col = find_col(['class_id', 'class', '班级'])
+        
         # 是学生数据，我们需要算出每道题的平均分
-        q_cols = [c for c in df.columns if c != s_col and c != f_col] # 排除学生列和满分列
+        # 排除学生列、满分列和班级列
+        excluded_cols = [s_col]
+        if f_col: excluded_cols.append(f_col)
+        if c_col: excluded_cols.append(c_col)
+        
+        q_cols = [c for c in df.columns if c not in excluded_cols]
+        
         if not q_cols:
             raise ValueError("未找到题目得分列。")
         
         aggregated = []
         
-        # 尝试获取满分信息 (可能作为单独的一行，或者需要从外部获取)
-        # 这里假设没有单独的满分行，而是需要用户提供，或者从数据中推断
-        # 增强功能：检查是否有"满分"列，或者第一行是否包含"满分"信息（对于某些格式）
-        
-        # 为了满足需求 "必须添加每道题的满分值字段"，对于学生数据，通常是宽表格式
-        # 满分信息很难在宽表中直接表示（除非有额外的一行）
-        # 兼容策略：
-        # A. 查找是否有一列叫 "满分"，且该列包含了每道题的满分？不现实，因为是宽表。
-        # B. 查找是否有一行 metadata。
-        # C. 假设每列的最大值可能是满分？不准确。
-        
-        # 根据需求：必须添加每道题的满分值字段。
-        # 在学生数据模式下，可能需要用户上传两个文件，或者文件格式包含满分行。
-        # 简单起见，我们假设数据中可能包含一行 '姓名'='满分' 的特殊行
-        
-        full_score_row = df[df[s_col].astype(str).str.contains('满分', na=False)]
+        # 尝试获取满分信息
         full_scores = {}
+        full_score_row_idx = None
         
-        if not full_score_row.empty:
-            # 提取满分行
+        # 1. 检查是否有"满分"列 (f_col) - 已在上面处理，但通常宽表没有f_col
+        
+        # 2. 检查特定行 (第一行或第二行) 是否为满分行
+        # 类似 validate_student_data 的逻辑
+        if not df.empty:
+            # Check first row
+            first_val = str(df.iloc[0][s_col]).strip()
+            if "满分" in first_val or "full" in first_val.lower() or "max" in first_val.lower():
+                full_score_row_idx = 0
+            # Check second row
+            elif len(df) > 1:
+                second_val = str(df.iloc[1][s_col]).strip()
+                if "满分" in second_val or "full" in second_val.lower() or "max" in second_val.lower():
+                    full_score_row_idx = 1
+        
+        if full_score_row_idx is not None:
+             # 提取满分行
+            row = df.iloc[full_score_row_idx]
             for q in q_cols:
                 try:
-                    val = pd.to_numeric(full_score_row.iloc[0][q])
+                    val = pd.to_numeric(row[q])
                     full_scores[q] = val
                 except:
-                    full_scores[q] = 10 # Default
-            # 移除满分行
-            df = df[~df[s_col].astype(str).str.contains('满分', na=False)]
-        else:
-            # 尝试查找列名中是否包含满分信息 e.g. "Q1(10分)"
-            for q in q_cols:
-                import re
-                match = re.search(r'\((\d+)分?\)', str(q))
-                if match:
-                    full_scores[q] = float(match.group(1))
+                    full_scores[q] = 10 # Default fallback
             
-            # 检查是否所有题目都找到了满分 (强制要求)
-            if len(full_scores) < len(q_cols):
-                 missing = [q for q in q_cols if q not in full_scores]
-                 raise ValueError(f"未找到以下题目的满分信息: {missing}。请在列名中标注，如 'Q1(10分)'，或提供满分行。")
+            # 移除满分行，以免影响平均分计算
+            df = df.drop(df.index[full_score_row_idx]).reset_index(drop=True)
+            
+        else:
+            # Fallback: 尝试全局搜索 "满分" 行 (兼容旧逻辑)
+            full_score_rows = df[df[s_col].astype(str).str.contains('满分', na=False)]
+            if not full_score_rows.empty:
+                row = full_score_rows.iloc[0]
+                for q in q_cols:
+                    try:
+                        val = pd.to_numeric(row[q])
+                        full_scores[q] = val
+                    except:
+                        full_scores[q] = 10
+                # 移除
+                df = df[~df[s_col].astype(str).str.contains('满分', na=False)]
+            else:
+                # 尝试从列名提取 Q1(10分)
+                for q in q_cols:
+                    import re
+                    match = re.search(r'[\(（](\d+)分?[\)）]', str(q))
+                    if match:
+                        full_scores[q] = float(match.group(1))
+        
+        # 检查是否所有题目都找到了满分
+        if len(full_scores) < len(q_cols):
+             missing = [q for q in q_cols if q not in full_scores]
+             # 如果缺失的满分信息太多，且没有满分行，报错
+             # 但如果只有部分缺失（可能列名解析失败），可以给默认值吗？
+             # 为了严格性，还是报错提示用户
+             raise ValueError(f"未找到以下题目的满分信息: {missing}。请在列名中标注，如 'Q1(10分)'，或提供满分行（在'{s_col}'列填'满分'）。")
         
         for q in q_cols:
             try:
@@ -319,25 +331,25 @@ def validate_student_data(df: pd.DataFrame) -> Dict[str, Any]:
     if not s_col:
         raise ValueError(f"无法识别学生标识列。请确保包含'姓名'或'学号'列。当前列: {list(df.columns)}")
     
-    # 1.5 Identify Class Identifier column (Optional but recommended)
-    c_col = find_col(['班级', 'class_id', 'class', 'grade_class'])
+    # 1.5 Identify Class Identifier column (Optional)
+    c_col = find_col(['class_id', 'class', '班级'])
 
     # 2. Identify Question Columns (all other columns)
-    # Exclude student column and class column
-    exclude_cols = [s_col]
+    # Exclude student column AND class column
+    excluded_cols = [s_col]
     if c_col:
-        exclude_cols.append(c_col)
-        
-    q_cols = [c for c in df.columns if c not in exclude_cols]
+        excluded_cols.append(c_col)
+
+    q_cols = [c for c in df.columns if c not in excluded_cols]
     if not q_cols:
         raise ValueError("未找到题目得分列。")
         
-    # Rename columns
-    rename_map = {s_col: 'student_id'}
-    if c_col:
-        rename_map[c_col] = 'class_id'
+    # Rename student column
+    df = df.rename(columns={s_col: 'student_id'})
     
-    df = df.rename(columns=rename_map)
+    # Rename class column if exists
+    if c_col:
+        df = df.rename(columns={c_col: 'class_id'})
     
     full_scores = {}
     
@@ -345,11 +357,17 @@ def validate_student_data(df: pd.DataFrame) -> Dict[str, Any]:
     # We check if the first row's student_id contains "满分" or "Full Score"
     full_score_row_idx = None
     
-    # Check first row explicitly
+    # Check first row and second row explicitly
     if not df.empty:
+        # Check first row
         first_val = str(df.iloc[0]['student_id']).strip()
         if "满分" in first_val or "full" in first_val.lower() or "max" in first_val.lower():
             full_score_row_idx = 0
+        # Check second row if first row is not it (User feedback: sometimes full score is on 2nd row)
+        elif len(df) > 1:
+            second_val = str(df.iloc[1]['student_id']).strip()
+            if "满分" in second_val or "full" in second_val.lower() or "max" in second_val.lower():
+                full_score_row_idx = 1
     
     if full_score_row_idx is not None:
         # Extract full scores from this row
@@ -364,6 +382,10 @@ def validate_student_data(df: pd.DataFrame) -> Dict[str, Any]:
         
         # Remove the full score row from data
         df = df.drop(df.index[full_score_row_idx]).reset_index(drop=True)
+    
+    # Extra safety: Ensure 'class_id' or similar columns are not treated as questions
+    # (In case they were missed by find_col for some reason)
+    q_cols = [c for c in q_cols if not any(k == str(c).lower() for k in ['class_id', 'class', '班级'])]
     
     # 3. Extract Full Scores from Headers (fallback or supplement)
     # (e.g., "Q1(10分)") - Only if not found in row, or to double check? 
