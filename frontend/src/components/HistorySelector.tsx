@@ -15,6 +15,7 @@ interface HistorySelectorProps {
     open: boolean;
     onClose: () => void;
     onLoad: (session: RatingSession) => void;
+    filterType?: string;
 }
 interface TabPanelProps {
     children?: React.ReactNode;
@@ -41,7 +42,7 @@ function TabPanel(props: TabPanelProps) {
     );
 }
 
-export const HistorySelector: React.FC<HistorySelectorProps> = ({ open, onClose, onLoad }) => {
+export const HistorySelector: React.FC<HistorySelectorProps> = ({ open, onClose, onLoad, filterType }) => {
     const [tabValue, setTabValue] = useState(0);
     const [localHistory, setLocalHistory] = useState<RatingSessionSummary[]>([]);
     const [remoteHistory, setRemoteHistory] = useState<RatingSessionSummary[]>([]);
@@ -58,11 +59,15 @@ export const HistorySelector: React.FC<HistorySelectorProps> = ({ open, onClose,
         try {
             // Load Local
             const local = await getSessionList();
-            setLocalHistory(local);
+            setLocalHistory(filterType ? local.filter(s => s.type === filterType) : local);
 
             // Load Remote
             try {
                 const response = await axios.get('http://localhost:8000/api/history/list');
+                // Remote filtering logic depends on backend API, but assuming we get all, we filter client side too if needed
+                // For now, assume remote history API might not support 'type' field yet or we ignore filtering for remote
+                // Or we filter if the remote data has type.
+                // Since user complained about interference, likely local IndexedDB.
                 setRemoteHistory(response.data);
             } catch (err) {
                 console.error("Failed to load remote history", err);

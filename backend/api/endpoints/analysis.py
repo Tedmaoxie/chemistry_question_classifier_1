@@ -7,6 +7,10 @@ from backend.tasks.analysis import analyze_question_task, analyze_single_model_t
 from backend.celery_app import celery_app
 import uuid
 import logging
+import os
+import sys
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +18,11 @@ router = APIRouter()
 
 # In-memory task store for fallback (when Redis/Celery is unavailable)
 MEMORY_TASKS = {}
+
+# 全局线程池，用于在桌面模式下执行耗时的同步大模型调用，避免阻塞 FastAPI 主循环
+# Global thread pool for executing time-consuming sync LLM calls in desktop mode
+# Increased max_workers to prevent blocking when tasks are retried or multiple models run
+executor = ThreadPoolExecutor(max_workers=10)
 
 class ModelConfig(BaseModel):
     provider: str
@@ -36,27 +45,46 @@ class RetryRequest(BaseModel):
 async def run_analysis_background(task_id: str, question_data: Dict[str, Any], configs: List[Dict[str, Any]]):
     """Background task wrapper for synchronous analysis (Legacy)"""
     try:
+        if task_id not in MEMORY_TASKS:
+            logger.warning(f"Task {task_id} no longer in MEMORY_TASKS, skipping update.")
+            return
         MEMORY_TASKS[task_id]["status"] = "PROCESSING"
-        # Convert Pydantic models to dicts if needed, or perform_analysis_sync handles dicts
-        result = perform_analysis_sync(question_data, configs)
+        # 使用线程池运行同步代码
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(executor, perform_analysis_sync, question_data, configs)
+        
+        if task_id not in MEMORY_TASKS:
+            logger.warning(f"Task {task_id} no longer in MEMORY_TASKS, skipping update.")
+            return
         MEMORY_TASKS[task_id]["status"] = "SUCCESS"
         MEMORY_TASKS[task_id]["result"] = result
     except Exception as e:
         logger.error(f"Background task failed: {e}")
-        MEMORY_TASKS[task_id]["status"] = "FAILURE"
-        MEMORY_TASKS[task_id]["error"] = str(e)
+        if task_id in MEMORY_TASKS:
+            MEMORY_TASKS[task_id]["status"] = "FAILURE"
+            MEMORY_TASKS[task_id]["error"] = str(e)
 
 async def run_single_model_background(task_id: str, question_data: Dict[str, Any], config: Dict[str, Any]):
     """Background task wrapper for synchronous single model analysis"""
     try:
+        if task_id not in MEMORY_TASKS:
+            logger.warning(f"Task {task_id} no longer in MEMORY_TASKS, skipping update.")
+            return
         MEMORY_TASKS[task_id]["status"] = "PROCESSING"
-        result = perform_single_model_analysis(question_data, config)
+        # 使用线程池运行同步代码，防止阻塞主循环，从而允许前端轮询请求得到响应
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(executor, perform_single_model_analysis, question_data, config)
+        
+        if task_id not in MEMORY_TASKS:
+            logger.warning(f"Task {task_id} no longer in MEMORY_TASKS, skipping update.")
+            return
         MEMORY_TASKS[task_id]["status"] = "SUCCESS"
         MEMORY_TASKS[task_id]["result"] = result
     except Exception as e:
         logger.error(f"Background task failed: {e}")
-        MEMORY_TASKS[task_id]["status"] = "FAILURE"
-        MEMORY_TASKS[task_id]["error"] = str(e)
+        if task_id in MEMORY_TASKS:
+            MEMORY_TASKS[task_id]["status"] = "FAILURE"
+            MEMORY_TASKS[task_id]["error"] = str(e)
 
 import os
 import threading
@@ -101,6 +129,13 @@ async def start_analysis(request: AnalysisRequest, background_tasks: BackgroundT
             pass
         except:
             pass
+
+    # Force fallback to in-memory BackgroundTasks if running in Desktop mode
+    # This avoids blocking on Celery eager execution
+    # Check for RUNNING_DESKTOP env var OR if we are running as a frozen executable (PyInstaller)
+    if os.environ.get("RUNNING_DESKTOP") == "true" or getattr(sys, 'frozen', False):
+        use_fallback = True
+        logger.info("Desktop mode detected: Using in-memory BackgroundTasks for analysis.")
 
     for q in questions:
         q_id = q.get("id")
@@ -264,32 +299,40 @@ async def get_tasks_status(task_ids: List[str] = Body(...)):
 @router.post("/tasks/stop")
 async def stop_tasks(task_ids: List[str] = Body(...)):
     """
-    Revoke (stop) a list of tasks.
+    Revoke (stop) a list of tasks and clear memory store.
     Also clears any pending tasks in the Celery queue.
     """
-    logger.info(f"Stopping tasks: received {len(task_ids)} IDs. Purging queue...")
+    logger.info(f"Stopping tasks: received {len(task_ids)} IDs. Purging queue and clearing memory...")
+    
+    # 1. 清理内存任务状态，将正在运行的任务标记为失败，但不使用 clear() 以免引起线程冲突
+    mem_count = 0
+    for tid in list(MEMORY_TASKS.keys()):
+        if MEMORY_TASKS[tid].get("status") in ["PENDING", "PROCESSING"]:
+            MEMORY_TASKS[tid]["status"] = "FAILURE"
+            MEMORY_TASKS[tid]["error"] = "User stopped analysis"
+            mem_count += 1
+    
+    # 不再执行 MEMORY_TASKS.clear()，让旧任务自然保留（或者后续可以加个定时清理机制）
+    logger.info(f"Marked {mem_count} memory tasks as stopped")
+
+    # 2. Revoke specific running/pending Celery tasks
     count = 0
-    # 1. Revoke specific running/pending tasks
     for tid in task_ids:
         try:
             # terminate=True kills the worker process executing the task
             celery_app.control.revoke(tid, terminate=True)
             count += 1
-            # Also update memory tasks if present
-            if tid in MEMORY_TASKS:
-                MEMORY_TASKS[tid]["status"] = "REVOKED"
         except Exception as e:
             logger.error(f"Failed to revoke task {tid}: {e}")
             
-    # 2. Purge the entire queue to remove any queued but not-yet-started tasks
-    # This prevents them from being picked up by workers after we "stopped"
+    # 3. Purge the entire queue to remove any queued but not-yet-started tasks
     try:
         purged_count = celery_app.control.purge()
         logger.info(f"Purged {purged_count} tasks from Celery queue")
     except Exception as e:
         logger.error(f"Failed to purge Celery queue: {e}")
             
-    return {"message": f"Stopped {count} tasks and purged queue"}
+    return {"message": f"Stopped {count} Celery tasks, cleared {mem_count} memory tasks and purged queue"}
 
 @router.post("/analyze/retry")
 async def retry_analysis(request: RetryRequest, background_tasks: BackgroundTasks):
@@ -304,13 +347,18 @@ async def retry_analysis(request: RetryRequest, background_tasks: BackgroundTask
     task_id = None
     use_fallback = False
     
-    try:
-        # Attempt to dispatch to Celery
-        task = analyze_single_model_task.delay(question, config)
-        task_id = task.id
-    except Exception as e:
-        logger.warning(f"Celery dispatch failed: {e}. Switching to in-memory fallback.")
+    # Desktop mode detection
+    if os.environ.get("RUNNING_DESKTOP") == "true" or getattr(sys, 'frozen', False):
         use_fallback = True
+    
+    if not use_fallback:
+        try:
+            # Attempt to dispatch to Celery
+            task = analyze_single_model_task.delay(question, config)
+            task_id = task.id
+        except Exception as e:
+            logger.warning(f"Celery dispatch failed: {e}. Switching to in-memory fallback.")
+            use_fallback = True
     
     if use_fallback:
         task_id = str(uuid.uuid4())

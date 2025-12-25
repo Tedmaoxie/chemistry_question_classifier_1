@@ -395,47 +395,63 @@ class LLMService:
                     raise ValueError(f"Failed to parse JSON response: {str(e)}. Raw snippet: {snippet}...")
             
             # Validation
-            if mode == "question_analysis":
-                required_fields = ["markdown_report", "comprehensive_rating"]
-                for field in required_fields:
-                    if field not in data:
-                        raise ValueError(f"Missing required field: {field}")
-                
-                # Deep validation
-                if not isinstance(data["markdown_report"], str) or not data["markdown_report"].strip():
-                    # Try to construct report from other fields if available
-                    if "analysis" in data and isinstance(data["analysis"], str):
-                        data["markdown_report"] = data["analysis"]
-                    elif "teaching_guide" in data:
-                        # Fallback: create a simple report
-                        data["markdown_report"] = f"**分析结果**\n\n(大模型未返回标准报告格式，以下是原始数据)\n\n```json\n{json.dumps(data, ensure_ascii=False, indent=2)}\n```"
+            if mode in ["question_analysis", "single_analysis", "multiple_analysis"]:
+                # Robust field extraction: try to find required fields even if misnamed or nested differently
+                if "comprehensive_rating" not in data:
+                    # Look for alternative names or top-level fields
+                    alt_rating = data.get("rating") or data.get("comprehensive") or data.get("assessment")
+                    if isinstance(alt_rating, dict):
+                        data["comprehensive_rating"] = alt_rating
                     else:
-                        # Advanced Fallback: Construct Markdown from Data
+                        # Synthesize from top-level fields if they exist
+                        synth_rating = {}
+                        if "final_level" in data: synth_rating["final_level"] = data["final_level"]
+                        if "average_score" in data: synth_rating["average_score"] = data["average_score"]
+                        if "downgrade_reason" in data: synth_rating["downgrade_reason"] = data["downgrade_reason"]
+                        
+                        if synth_rating:
+                            data["comprehensive_rating"] = synth_rating
+                        else:
+                            # Last resort: default values to avoid crash
+                            logger.warning(f"Missing 'comprehensive_rating' in {mode} response, providing defaults.")
+                            data["comprehensive_rating"] = {
+                                "final_level": data.get("level", "L1"),
+                                "average_score": data.get("score", 1.0),
+                                "downgrade_reason": ""
+                            }
+
+                if "markdown_report" not in data:
+                    # Look for alternative names
+                    alt_report = data.get("report") or data.get("analysis") or data.get("content")
+                    if isinstance(alt_report, str) and alt_report.strip():
+                        data["markdown_report"] = alt_report
+                    else:
+                        logger.warning(f"Missing 'markdown_report' in {mode} response, generating fallback.")
                         data["markdown_report"] = self._construct_markdown_from_data(data)
+
+                # Now that we've tried to fix it, ensure basic types are correct
+                if not isinstance(data.get("comprehensive_rating"), dict):
+                    data["comprehensive_rating"] = {"final_level": "L1", "average_score": 1.0, "downgrade_reason": ""}
                 
-                # Check if markdown_report is lazily just a JSON code block (common with Zhipu/GLM)
-                # If the report is > 50% similar to the JSON dump or looks like a code block, regenerate it.
+                if not isinstance(data.get("markdown_report"), str):
+                    data["markdown_report"] = self._construct_markdown_from_data(data)
+
+                # Deep validation
+                if not data["markdown_report"].strip():
+                    data["markdown_report"] = self._construct_markdown_from_data(data)
+                
+                # Check if markdown_report is lazily just a JSON code block
                 report_strip = data["markdown_report"].strip()
-                
                 is_json_code_block = (report_strip.startswith("```json") or report_strip.startswith("```")) and report_strip.endswith("```")
                 is_raw_json = report_strip.startswith("{") and report_strip.endswith("}")
                 
                 if is_json_code_block or is_raw_json:
-                     # It's likely just a code block or raw JSON. Check if it contains mostly JSON.
-                     # We'll just assume if it's a code block/raw JSON, we prefer our friendly format.
                      logger.info("Detected JSON content in markdown_report. Replacing with friendly format.")
-                     # If it's a code block, strip the fences to get the JSON content (optional verification)
-                     # But we already have the 'data' dict, so we can just reconstruct from 'data'.
-                     # However, 'data' might be the *entire* response. 
-                     # The 'markdown_report' field *itself* might be a JSON string of the report or the whole data.
-                     # We will just ignore what's in 'markdown_report' and rebuild from the structured data we parsed from the main response.
                      data["markdown_report"] = self._construct_markdown_from_data(data)
 
-                if not isinstance(data.get("comprehensive_rating"), dict):
-                    raise ValueError("Field 'comprehensive_rating' must be an object")
-
-                # Apply strict grading logic validation
-                data = self._validate_and_correct_grading(data)
+                # Apply strict grading logic validation (only for question analysis)
+                if mode == "question_analysis":
+                    data = self._validate_and_correct_grading(data)
 
                 # Backwards compatibility for frontend
                 if "final_level" not in data and "comprehensive_rating" in data:
@@ -473,6 +489,11 @@ class LLMService:
                 "error": error_msg,
                 "level": "Error",
                 "final_level": "Error",
+                "comprehensive_rating": {
+                    "final_level": "Error",
+                    "average_score": 0,
+                    "downgrade_reason": error_msg
+                },
                 "scores": [0, 0, 0],
                 "markdown_report": f"**分析失败**\n\n发生错误：{error_msg}\n\n请检查 API Key 和配置是否正确，或稍后重试。"
             }
@@ -622,8 +643,8 @@ class LLMService:
             import sys
             if getattr(sys, 'frozen', False):
                 # Running as PyInstaller bundle (frozen)
-                # sys.executable points to the .exe file
-                project_root = os.path.dirname(sys.executable)
+                # sys._MEIPASS points to the bundle directory where datas are extracted/located
+                project_root = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
             else:
                 # Running as script (dev)
                 # Use absolute path to ensure file is found regardless of CWD

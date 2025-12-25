@@ -33,8 +33,11 @@ export interface RatingSession {
     analysisMode: string;
     modelConfigs: ModelConfig[];
     questions: Question[];
+    scoreData?: any[];
+    analysisResult?: any;
     schemaVersion: number;
     appVersion?: string;
+    type?: string; // 'calibration' | 'score_analysis'
 }
 
 export interface RatingSessionSummary {
@@ -42,4 +45,5 @@ export interface RatingSessionSummary {
     examName: string;
     createdAt: string;
     questionCount: number;
+    type?: string;
 }

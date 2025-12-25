@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 import os
 import sys
+import traceback
 
 # Debug: Print sys.path to understand import environment
 print(f"DEBUG: sys.path: {sys.path}")
@@ -25,26 +26,40 @@ app = FastAPI(
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Allow all for now to avoid CORS issues in Space
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost",
+    ], # Allow specific origins for CORS with credentials
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
+    )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    error_msg = f"Global Exception: {str(exc)}\n{traceback.format_exc()}"
+    print(error_msg)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "message": str(exc)},
+    )
+
 # Include API Router
 app.include_router(api_router, prefix=settings.API_PREFIX)
 
 # Serve Frontend Static Files
-# Mount /assets to frontend/dist/assets
-# Ensure the path is correct relative to where uvicorn is run or executable location
-if getattr(sys, 'frozen', False):
-    # Running as PyInstaller bundle
-    base_dir = os.path.dirname(sys.executable)
-else:
-    # Running as script
-    base_dir = os.getcwd()
-
-frontend_dist_path = os.path.join(base_dir, "frontend", "dist")
+# Use BASE_DIR from settings which is aware of frozen state
+frontend_dist_path = os.path.join(settings.BASE_DIR, "frontend", "dist")
 
 if os.path.exists(frontend_dist_path):
     app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist_path, "assets")), name="assets")
@@ -76,3 +91,15 @@ async def startup_event():
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
     logger.info(f"Starting up {settings.PROJECT_NAME}...")
+
+    # Automatically open browser in desktop mode or frozen executable
+    if os.environ.get("RUNNING_DESKTOP") == "true" or getattr(sys, 'frozen', False):
+        import webbrowser
+        from threading import Timer
+
+        def open_browser():
+            # Wait a short moment to ensure server is fully ready
+            webbrowser.open("http://127.0.0.1:8000")
+        
+        logger.info("Desktop mode detected: Scheduling browser auto-open...")
+        Timer(1.5, open_browser).start()

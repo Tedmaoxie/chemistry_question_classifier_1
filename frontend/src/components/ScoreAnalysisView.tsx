@@ -2,10 +2,11 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
     Box, Card, CardContent, Typography, Button, 
     GridLegacy as Grid, Alert, LinearProgress, Stack, Divider,
-    Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper,
+    Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, TablePagination,
     Tabs, Tab, AlertTitle, Dialog, DialogTitle, DialogContent, IconButton, Tooltip,
     CircularProgress, Fade, CardActions, Collapse, Avatar, TextField, Chip,
-    Accordion, AccordionSummary, AccordionDetails, Select, MenuItem
+    Accordion, AccordionSummary, AccordionDetails, Select, MenuItem,
+    FormControlLabel, Switch
 } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DownloadIcon from '@mui/icons-material/Download';
@@ -20,6 +21,8 @@ import StarIcon from '@mui/icons-material/Star';
 import TimelineIcon from '@mui/icons-material/Timeline';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import SaveIcon from '@mui/icons-material/Save';
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import axios from 'axios';
 import * as echarts from 'echarts';
 import ReactMarkdown from 'react-markdown';
@@ -27,8 +30,10 @@ import remarkGfm from 'remark-gfm';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 
-import { Question, ModelConfig } from '../types';
+import { RatingSession, Question, ModelConfig } from '../types';
 import { getModelDisplayLabel } from '../utils/helpers';
+import { saveSessionToIndexedDB } from '../utils/indexedDb';
+import { HistorySelector } from './HistorySelector';
 
 const BLOCK_SIZE = 24;
 
@@ -59,11 +64,11 @@ const FormatInstruction = ({ mode }: { mode: 'class' | 'student' }) => {
         let content = "";
         let filename = "";
         if (mode === 'class') {
-            content = "question_id,full_score,score_rate\nQ1,10,0.85\nQ2,10,0.76\nQ3,5,0.92";
-            filename = "class_sample.csv";
+            content = "question_id,full_score,Grade,A1,R1,B1\nQ1,10,0.85,0.80,0.82,0.78\nQ2,10,0.76,0.70,0.75,0.72\nQ3,5,0.92,0.88,0.90,0.85";
+            filename = "class_sample_multi.csv";
         } else {
-            // Updated sample to show Full Score Row format
-            content = "student_id,Q1,Q2,Q3\nFull Score,10,10,5\nStudentA,8,7,4\nStudentB,9,8,5";
+            // Updated sample to match user request: Class ID first, then Student ID, then Full Score Row
+            content = "class_id,student_id,Q1,Q2,Q3,Q4\n,Full Score,10,15,12,8\nA1,S001,8,12,10,6\nA1,S002,9,14,11,7\nA2,S003,7,10,9,5\nA2,S004,10,15,12,8";
             filename = "student_sample.csv";
         }
         const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
@@ -80,10 +85,18 @@ const FormatInstruction = ({ mode }: { mode: 'class' | 'student' }) => {
         <Box sx={{ mt: 2, mb: 2 }}>
             <Alert severity="info" icon={<HelpOutlineIcon />}>
                 <AlertTitle>{mode === 'class' ? '集体分析模式' : '个人分析模式'} 数据格式要求</AlertTitle>
-                <Typography variant="body2" paragraph>
+                <Typography variant="body2" component="div" paragraph>
                     {mode === 'class' 
-                        ? "适用于对全班或全年级的整体考试情况进行分析。系统将根据每道题的平均得分率，分析班级的整体知识掌握情况和薄弱点。"
-                        : "适用于对每位学生的具体答题情况进行个性化分析。支持两种满分定义方式：1. 独立满分行 (推荐，第一行首列填'满分')；2. 列名标注 (如 Q1(3分))。"}
+                        ? "适用于对全班或全年级的整体考试情况进行分析。支持批量上传多个班级/年级数据进行对比分析（推荐使用宽表格式：第一列题号，第二列满分，后续列为各班级/年级得分率）。"
+                        : (
+                            <>
+                                适用于对每位学生的具体答题情况进行个性化分析。<br/>
+                                <strong>文件结构说明：</strong><br/>
+                                1. <strong>第一行 (表头):</strong> 第一列 class_id，第二列 student_id，第三列起为题目ID (Q1, Q2...)<br/>
+                                2. <strong>第二行 (满分行):</strong> 第一列留空，第二列填“满分”，第三列起为对应题目的满分值<br/>
+                                3. <strong>第三行起 (数据行):</strong> 第一列班级，第二列姓名/学号，第三列起为学生得分
+                            </>
+                        )}
                 </Typography>
                 
                 <Typography variant="subtitle2" sx={{ mt: 1, fontWeight: 'bold' }}>支持格式:</Typography>
@@ -93,8 +106,8 @@ const FormatInstruction = ({ mode }: { mode: 'class' | 'student' }) => {
                 <Typography variant="body2">不超过 10MB</Typography>
 
                 <Typography variant="subtitle2" sx={{ mt: 1, fontWeight: 'bold' }}>字段结构要求:</Typography>
-                <TableContainer component={Paper} variant="outlined" sx={{ mt: 1, mb: 1, maxWidth: 500 }}>
-                    <Table size="small">
+                <TableContainer component={Paper} variant="outlined" sx={{ mt: 1, mb: 1, maxWidth: '100%' }}>
+                    <Table size="small" sx={{ minWidth: 1100 }}>
                         <TableHead>
                             <TableRow sx={{ bgcolor: '#f5f5f5' }}>
                                 <TableCell>字段名称</TableCell>
@@ -116,32 +129,32 @@ const FormatInstruction = ({ mode }: { mode: 'class' | 'student' }) => {
                                         <TableCell>该题的满分值 (默认为10)</TableCell>
                                     </TableRow>
                                     <TableRow>
-                                        <TableCell>得分率 / score_rate</TableCell>
+                                        <TableCell>分组列 (如: Grade, A1...)</TableCell>
                                         <TableCell>是</TableCell>
-                                        <TableCell>0-1之间的小数或0-100的数值</TableCell>
+                                        <TableCell>从第三列开始，每一列代表一个分组。列名为分组名称(如"Grade","A1","R1")，值为得分率(0-1或0-100)。</TableCell>
                                     </TableRow>
                                 </>
                             ) : (
                                 <>
                                     <TableRow>
+                                        <TableCell>班级 / class_id</TableCell>
+                                        <TableCell>是</TableCell>
+                                        <TableCell>第一列 (Column 1)。第一行表头，第二行留空，第三行起填班级。</TableCell>
+                                    </TableRow>
+                                    <TableRow>
                                         <TableCell>姓名 / student_id</TableCell>
                                         <TableCell>是</TableCell>
-                                        <TableCell>学生唯一标识</TableCell>
+                                        <TableCell>第二列 (Column 2)。第一行表头，第二行填“满分”，第三行起填姓名。</TableCell>
                                     </TableRow>
                                     <TableRow>
-                                        <TableCell>满分行 / Full Score Row (可选)</TableCell>
-                                        <TableCell>否</TableCell>
-                                        <TableCell>第一行首列填写"满分"，后续列填写对应题目满分</TableCell>
-                                    </TableRow>
-                                    <TableRow>
-                                        <TableCell>Q1(10分)... (列名)</TableCell>
-                                        <TableCell>否</TableCell>
-                                        <TableCell>若无满分行，建议在列名中标注满分</TableCell>
+                                        <TableCell>满分行 / Full Score Row</TableCell>
+                                        <TableCell>是</TableCell>
+                                        <TableCell>第二行 (Row 2)。必需。第一列留空，第二列填“满分”，后续列填满分值。</TableCell>
                                     </TableRow>
                                     <TableRow>
                                         <TableCell>Q1, Q2... (得分)</TableCell>
                                         <TableCell>是</TableCell>
-                                        <TableCell>每道题的具体得分 (数值)</TableCell>
+                                        <TableCell>第三列起 (Column 3+)。第一行题号，第二行满分，第三行起填得分。</TableCell>
                                     </TableRow>
                                 </>
                             )}
@@ -159,202 +172,488 @@ const FormatInstruction = ({ mode }: { mode: 'class' | 'student' }) => {
     );
 };
 
+// --- Optimized Cell Component ---
+const MemoizedEditableCell = React.memo(({ 
+    value, 
+    onCommit, 
+    disabled = false
+}: { 
+    value: string | number, 
+    onCommit: (val: string) => void,
+    align?: 'left' | 'right' | 'center',
+    type?: 'text' | 'number',
+    disabled?: boolean
+}) => {
+    const [localValue, setLocalValue] = useState(value);
+
+    // Sync from props if external value changes (e.g. initial load or reset)
+    useEffect(() => {
+        setLocalValue(value);
+    }, [value]);
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setLocalValue(e.target.value);
+    };
+
+    const handleBlur = () => {
+        if (localValue !== value) {
+            onCommit(String(localValue));
+        }
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter') {
+            (e.target as HTMLInputElement).blur();
+        }
+    };
+
+    if (disabled) {
+        return (
+            <Typography variant="body2" color="text.primary">
+                {value}
+            </Typography>
+        );
+    }
+
+    return (
+        <TextField
+            variant="standard"
+            size="small"
+            value={localValue}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            InputProps={{ 
+                disableUnderline: true, 
+                style: { fontSize: '0.875rem' } 
+            }}
+            sx={{ width: '100%' }}
+        />
+    );
+});
+MemoizedEditableCell.displayName = 'MemoizedEditableCell';
+
+const generateMarkdownFromJSON = (result: any) => {
+    let md = "";
+    
+    // Helper to format object to string
+    const formatValue = (val: any, depth = 0): string => {
+        if (val === null || val === undefined) return '';
+        if (typeof val === 'string') return val;
+        if (typeof val === 'number') return String(val);
+        if (Array.isArray(val)) {
+             return val.map(item => `- ${formatValue(item, depth + 1)}`).join('\n');
+        }
+        if (typeof val === 'object') {
+            return Object.entries(val).map(([k, v]) => {
+                const indent = "  ".repeat(depth);
+                return `${indent}- **${k}**: ${formatValue(v, depth + 1)}`;
+            }).join('\n');
+        }
+        return String(val);
+    };
+
+    // --- Class Mode Keys ---
+    if (result["总体分析"]) {
+        md += "## 1. 总体分析\n\n";
+        md += formatValue(result["总体分析"]) + "\n\n";
+    }
+
+    // --- Student Mode Keys ---
+    
+    // 1. Knowledge Topic Analysis
+    // Backend returns "知识主题掌握情况" (List) or "知识主题分析" (Old/LLM)
+    const topicAnalysis = result["知识主题掌握情况"] || result["知识主题分析"];
+    if (topicAnalysis) {
+        md += "## 2. 知识主题分析\n\n";
+        if (Array.isArray(topicAnalysis)) {
+             // Handle list of topic stats
+             md += "| 知识主题 | 掌握程度 | 评价 | 主要问题 |\n";
+             md += "| --- | --- | --- | --- |\n";
+             topicAnalysis.forEach((item: any) => {
+                 const topic = item["知识主题"] || item.topic || "-";
+                 const rate = item["掌握程度"] || item.rate || "-";
+                 const evalStr = item["掌握评价"] || item.evaluation || "-";
+                 const issue = item["主要问题"] || item.issue || "";
+                 md += `| ${topic} | ${rate} | ${evalStr} | ${issue} |\n`;
+             });
+             md += "\n";
+        } else {
+            md += formatValue(topicAnalysis) + "\n\n";
+        }
+    }
+
+    // 2. Ability Analysis
+    // Backend returns "能力要素分析" (Dict)
+    if (result["能力要素分析"]) {
+        md += "## 3. 能力要素分析\n\n";
+        // If it is the structured dict from backend
+        const abilityData = result["能力要素分析"];
+        if (typeof abilityData === 'object' && !Array.isArray(abilityData)) {
+            Object.entries(abilityData).forEach(([category, abilities]: [string, any]) => {
+                md += `### ${category}\n\n`;
+                md += "| 能力要素 | 掌握程度 | 典型表现 |\n";
+                md += "| --- | --- | --- |\n";
+                if (typeof abilities === 'object') {
+                    Object.entries(abilities).forEach(([name, info]: [string, any]) => {
+                         const rate = info["掌握程度"] || "-";
+                         const desc = info["典型表现"] || "-";
+                         md += `| ${name} | ${rate} | ${desc} |\n`;
+                    });
+                }
+                md += "\n";
+            });
+        } else {
+            md += formatValue(abilityData) + "\n\n";
+        }
+    }
+
+    // 3. Wrong Question Analysis
+    // Backend returns "错题分析" (List)
+    if (result["错题分析"]) {
+        md += "## 4. 错题深度诊断\n\n";
+        if (Array.isArray(result["错题分析"])) {
+            result["错题分析"].forEach((item: any, idx: number) => {
+                const qid = item["题号"] || `错题 ${idx+1}`;
+                md += `### ${qid}\n\n`;
+                md += `- **错误类型**: ${item["错误类型"] || "未归类"}\n`;
+                md += `\n**根本原因**:\n${item["根本原因"] || "暂无"}\n\n`;
+                md += `**纠正建议**:\n${item["纠正建议"] || "暂无"}\n\n`;
+                if (item["推荐复习题型"]) {
+                    md += `**推荐复习题型**:\n${item["推荐复习题型"]}\n\n`;
+                }
+                md += "---\n\n";
+            });
+        } else {
+             md += formatValue(result["错题分析"]) + "\n\n";
+        }
+    }
+
+    // 4. Suggestions
+    const suggestion = result["个性化提升建议"] || result["提分建议"] || result["教学建议"];
+    if (suggestion) {
+        md += "## 5. 改进建议\n\n";
+        md += formatValue(suggestion) + "\n\n";
+    }
+
+    // Fallback for Class Mode "能力短板诊断"
+    if (result["能力短板诊断"]) {
+        md += "## 2. 能力短板诊断\n\n";
+         if (Array.isArray(result["能力短板诊断"])) {
+            result["能力短板诊断"].forEach((item: any, idx: number) => {
+                const qid = item["题号"] || `项目 ${idx+1}`;
+                md += `### ${qid}\n\n`;
+                md += `- **难度等级**: ${item["难度等级"] || "-"}\n`;
+                md += `- **得分率**: ${item["得分率"] || "-"}\n`;
+                md += `\n**问题诊断**:\n${item["问题诊断"] || "-"}\n\n`;
+                md += `**教学建议**:\n${item["教学建议"] || "-"}\n\n`;
+                md += "---\n\n";
+            });
+         } else {
+             md += formatValue(result["能力短板诊断"]) + "\n\n";
+         }
+    }
+
+    // General Fallback
+    if (!md && Object.keys(result).length > 0) {
+        md = formatValue(result);
+    }
+
+    return md;
+};
+
 // --- Chart Components ---
 
-const AnalysisCharts = ({ result, mode, studentRow, classAverages, fullScores, questions }: { 
+const AnalysisCharts = ({ result, mode, studentRow, classAverages, gradeAverages, fullScores, questions, modelLabel, onDownloadPDF }: { 
     result: any, 
     mode: 'class' | 'student',
     studentRow?: any,
     classAverages?: Record<string, number>,
+    gradeAverages?: Record<string, number>,
     fullScores?: Record<string, number>,
-    questions?: Question[]
+    questions?: Question[],
+    modelLabel?: string,
+    onDownloadPDF?: () => void
 }) => {
     const chart1Ref = useRef<HTMLDivElement>(null);
     const chart2Ref = useRef<HTMLDivElement>(null);
     const chart3Ref = useRef<HTMLDivElement>(null);
+    const [showGradeComparison, setShowGradeComparison] = useState(false);
 
+    // Initialize charts once
     useEffect(() => {
-        if (!result) return;
+        const initChart = (ref: React.RefObject<HTMLDivElement>) => {
+            if (ref.current) {
+                if (!echarts.getInstanceByDom(ref.current)) {
+                    echarts.init(ref.current);
+                }
+            }
+        };
 
-        const chart1 = chart1Ref.current ? echarts.init(chart1Ref.current) : null;
-        const chart2 = chart2Ref.current ? echarts.init(chart2Ref.current) : null;
-        const chart3 = chart3Ref.current ? echarts.init(chart3Ref.current) : null;
+        initChart(chart1Ref);
+        initChart(chart2Ref);
+        initChart(chart3Ref);
 
         const resizeHandler = () => {
-            chart1?.resize();
-            chart2?.resize();
-            chart3?.resize();
+            chart1Ref.current && echarts.getInstanceByDom(chart1Ref.current)?.resize();
+            chart2Ref.current && echarts.getInstanceByDom(chart2Ref.current)?.resize();
+            chart3Ref.current && echarts.getInstanceByDom(chart3Ref.current)?.resize();
         };
         window.addEventListener('resize', resizeHandler);
 
-        // Calculate covered abilities from questions
-        const coveredAbilities = new Set<string>();
-        if (questions) {
-            questions.forEach(q => {
-                // Try to find ability in meta from any analysis key, or specific if needed.
-                // Assuming standard keys or iterating all.
-                if (q.analysis) {
-                    Object.values(q.analysis).forEach((an: any) => {
-                        if (an?.meta?.ability_elements) {
-                            const abs = an.meta.ability_elements;
-                            const list = Array.isArray(abs) ? abs : (typeof abs === 'string' ? abs.split(/[,，]/) : []);
-                            list.forEach((a: string) => coveredAbilities.add(a.trim()));
-                        }
-                    });
-                }
-            });
-        }
+        return () => {
+            window.removeEventListener('resize', resizeHandler);
+            chart1Ref.current && echarts.getInstanceByDom(chart1Ref.current)?.dispose();
+            chart2Ref.current && echarts.getInstanceByDom(chart2Ref.current)?.dispose();
+            chart3Ref.current && echarts.getInstanceByDom(chart3Ref.current)?.dispose();
+        };
+    }, []);
+
+    // Update chart options
+    useEffect(() => {
+        if (!result) return;
+
+        const chart1 = chart1Ref.current ? echarts.getInstanceByDom(chart1Ref.current) : null;
+        const chart2 = chart2Ref.current ? echarts.getInstanceByDom(chart2Ref.current) : null;
+        const chart3 = chart3Ref.current ? echarts.getInstanceByDom(chart3Ref.current) : null;
 
         try {
             if (mode === 'class') {
-                // 1. 难度分布 (柱状图)
-                if (chart1 && result["总体分析"] && result["总体分析"]["各等级得分率分析"]) {
-                    const levels = ["L1", "L2", "L3", "L4", "L5"];
-                    const rates = levels.map(l => {
-                        const val = result["总体分析"]["各等级得分率分析"][l]?.["平均得分率"];
-                        let numVal = parseFloat(String(val).replace('%', '')) || 0;
-                        if (numVal <= 1.05 && numVal >= 0) { 
-                             numVal = numVal * 100;
+                // --- Helper: Calculate Stats ---
+                const calculateStats = (averages: Record<string, number> | undefined, fulls: Record<string, number> | undefined) => {
+                    if (!averages || !questions || !fulls) return null;
+
+                    const difficultyStats: Record<string, { earned: number, total: number }> = {};
+                    const topicStats: Record<string, { earned: number, total: number }> = {};
+                    const abilityStats: Record<string, { earned: number, total: number }> = {};
+
+                    questions.forEach((q, idx) => {
+                        const qId = `Q${idx + 1}`;
+                        const avg = averages[qId] || 0;
+                        const full = fulls[qId] || 10;
+                        
+                        // Pick the correct analysis based on modelLabel
+                        let analysis: any = null;
+                        if (q.analysis) {
+                            if (modelLabel && q.analysis[modelLabel]) {
+                                analysis = q.analysis[modelLabel];
+                            } else {
+                                analysis = Object.values(q.analysis)[0];
+                            }
                         }
-                        return parseFloat(numVal.toFixed(1));
+
+                        // Difficulty
+                        let level = '未知';
+                        if (analysis) {
+                            const rawLevel = analysis.final_level || analysis.comprehensive_rating?.final_level || analysis.meta?.difficulty;
+                            if (rawLevel) {
+                                const match = rawLevel.match(/(L[1-5])/);
+                                level = match ? match[1] : rawLevel;
+                            }
+                        }
+
+                        // Topic
+                        let topic = (q as any).framework_topic || (q as any).knowledge_topic || '未分类';
+                        if (analysis) {
+                            if (analysis.framework_topic) topic = analysis.framework_topic;
+                            else if (analysis.meta?.framework_topic) topic = analysis.meta.framework_topic;
+                            else if (analysis.meta?.knowledge_topic) topic = analysis.meta.knowledge_topic;
+                        }
+
+                        // Abilities
+                        let abilities: string[] = [];
+                        if (analysis) {
+                            const abs = analysis.ability_elements || analysis.meta?.ability_elements;
+                            if (abs) {
+                                abilities = Array.isArray(abs) ? abs : (typeof abs === 'string' ? abs.split(/[,，]/) : []);
+                            }
+                        }
+
+                        // Difficulty Aggregation
+                        if (level && level.startsWith('L')) {
+                             if (!difficultyStats[level]) difficultyStats[level] = { earned: 0, total: 0 };
+                             difficultyStats[level].earned += avg;
+                             difficultyStats[level].total += full;
+                        }
+                        
+                        // Topic Aggregation
+                        if (topic) {
+                            if (!topicStats[topic]) topicStats[topic] = { earned: 0, total: 0 };
+                            topicStats[topic].earned += avg;
+                            topicStats[topic].total += full;
+                        }
+
+                        // Ability Aggregation
+                        abilities.forEach(ab => {
+                            const key = ab.trim();
+                            if (key) {
+                                if (!abilityStats[key]) abilityStats[key] = { earned: 0, total: 0 };
+                                abilityStats[key].earned += avg;
+                                abilityStats[key].total += full;
+                            }
+                        });
                     });
 
+                    return { difficultyStats, topicStats, abilityStats };
+                };
+
+                const classStats = calculateStats(classAverages, fullScores);
+                // For Grade Comparison: use gradeAverages if available
+                const gradeStats = (showGradeComparison && gradeAverages) ? calculateStats(gradeAverages, fullScores) : null;
+
+                // 1. 难度分布 (柱状图)
+                if (chart1 && classStats && classStats.difficultyStats) {
+                    const levels = ["L1", "L2", "L3", "L4", "L5"];
+                    const rates = levels.map(l => {
+                        const stat = classStats.difficultyStats[l];
+                        return stat && stat.total > 0 ? parseFloat(((stat.earned / stat.total) * 100).toFixed(1)) : 0;
+                    });
+
+                    const series: any[] = [{
+                        name: '本班',
+                        data: rates,
+                        type: 'bar',
+                        itemStyle: { color: '#4285F4' },
+                        label: { show: true, position: 'top', formatter: '{c}%' }
+                    }];
+
+                    if (gradeStats && gradeStats.difficultyStats) {
+                        const gradeRates = levels.map(l => {
+                            const stat = gradeStats.difficultyStats[l];
+                            return stat && stat.total > 0 ? parseFloat(((stat.earned / stat.total) * 100).toFixed(1)) : 0;
+                        });
+
+                        series.push({
+                            name: '全年级',
+                            data: gradeRates,
+                            type: 'bar',
+                            itemStyle: { color: '#EA4335' },
+                            label: { show: true, position: 'top', formatter: '{c}%' }
+                        });
+                    }
+                   
                     chart1.setOption({
                         title: { text: '难度分级得分率', left: 'center' },
                         tooltip: { trigger: 'axis' },
+                        legend: { data: series.map(s => s.name), bottom: 0 },
                         xAxis: { type: 'category', data: levels },
                         yAxis: { type: 'value', name: '得分率(%)', max: 100 },
-                        series: [{
-                            data: rates,
-                            type: 'bar',
-                            itemStyle: { color: '#4285F4' },
-                            label: { show: true, position: 'top', formatter: '{c}%' }
-                        }]
-                    });
+                        series: series
+                    }, { notMerge: true });
                 }
 
                 // 2. 知识主题掌握度 (雷达图)
-                if (chart2 && result["知识主题分析"]) {
-                    const topics = result["知识主题分析"].map((t: any) => t["框架知识主题"]);
-                    const scores = result["知识主题分析"].map((t: any) => {
-                        let val = parseFloat(String(t["平均得分率"]).replace('%', '')) || 0;
-                        if (val <= 1.05 && val >= 0) val = val * 100;
-                        return parseFloat(val.toFixed(1));
+                if (chart2 && classStats && classStats.topicStats) {
+                    const topics = Object.keys(classStats.topicStats);
+                    const scores = topics.map(t => {
+                        const stat = classStats.topicStats[t];
+                        return stat && stat.total > 0 ? parseFloat(((stat.earned / stat.total) * 100).toFixed(1)) : 0;
                     });
+
+                    const indicators = topics.map((t: string) => ({ name: t, max: 100 }));
+                    
+                    const seriesData: any[] = [{
+                        value: scores,
+                        name: '本班平均得分率',
+                        areaStyle: { color: 'rgba(66, 133, 244, 0.2)' },
+                        lineStyle: { color: '#4285F4' }
+                    }];
+
+                    if (gradeStats && gradeStats.topicStats) {
+                        const gradeScores = topics.map((t: string) => {
+                            const stat = gradeStats.topicStats[t];
+                            return stat && stat.total > 0 ? parseFloat(((stat.earned / stat.total) * 100).toFixed(1)) : 0;
+                        });
+                        seriesData.push({
+                            value: gradeScores,
+                            name: '全年级平均得分率',
+                            areaStyle: { color: 'rgba(234, 67, 53, 0.2)' },
+                            lineStyle: { color: '#EA4335', type: 'dashed' }
+                        });
+                    }
 
                     chart2.setOption({
                         title: { text: '知识主题掌握度', left: 'center' },
-                        tooltip: { trigger: 'axis' },
+                        tooltip: { trigger: 'item' },
+                        legend: { data: seriesData.map(s => s.name), bottom: 0 },
                         radar: {
-                            indicator: topics.map((t: string) => ({ name: t, max: 100 })),
+                            indicator: indicators,
                             radius: '60%',
-                            center: ['50%', '60%']
+                            center: ['50%', '50%']
                         },
                         series: [{
                             type: 'radar',
-                            data: [{
-                                value: scores,
-                                name: '平均得分率',
-                                areaStyle: { color: 'rgba(66, 133, 244, 0.2)' },
-                                lineStyle: { color: '#4285F4' }
-                            }]
+                            data: seriesData
                         }]
-                    });
+                    }, { notMerge: true });
                 }
 
-                // 3. 能力素养雷达图 (新增)
-                // Need to compute from questions + classAverages
-                if (chart3) {
-                    if (questions && classAverages && fullScores) {
-                        const abilityStats: Record<string, { earned: number, total: number }> = {};
-                        
-                        questions.forEach((q, idx) => {
-                            // Ensure ID matches the normalized score data (Q1, Q2...)
-                            // This must match handleUpload normalization logic
-                            const normalizedId = `Q${idx + 1}`;
-                            
-                            let abilities: string[] = [];
-                            // Use first available analysis or specific logic
-                            if (q.analysis) {
-                                const found = Object.values(q.analysis).find((an: any) => an?.meta?.ability_elements);
-                                if (found) {
-                                    const abs = (found as any).meta.ability_elements;
-                                    abilities = Array.isArray(abs) ? abs : (typeof abs === 'string' ? abs.split(/[,，]/) : []);
-                                }
-                            }
-                            
-                            if (abilities.length > 0) {
-                                const avg = classAverages[normalizedId] || 0;
-                                const full = fullScores[normalizedId] || 10;
-                                
-                                abilities.forEach(ab => {
-                                    const key = ab.trim();
-                                    if (!key) return;
-                                    if (!abilityStats[key]) abilityStats[key] = { earned: 0, total: 0 };
-                                    abilityStats[key].earned += avg;
-                                    abilityStats[key].total += full;
-                                });
-                            }
-                        });
+                // 3. 能力素养雷达图
+                if (chart3 && classStats && classStats.abilityStats) {
+                    const abilityStats = classStats.abilityStats;
+                    const indicators = Object.keys(abilityStats).map(key => ({ name: key, max: 100 }));
+                    const values = Object.keys(abilityStats).map(key => {
+                        const stat = abilityStats[key];
+                        return stat.total > 0 ? parseFloat(((stat.earned / stat.total) * 100).toFixed(1)) : 0;
+                    });
 
-                        const indicators = Object.keys(abilityStats).map(key => ({ name: key, max: 100 }));
-                        const values = Object.keys(abilityStats).map(key => {
-                            const stat = abilityStats[key];
-                            return stat.total > 0 ? parseFloat(((stat.earned / stat.total) * 100).toFixed(1)) : 0;
-                        });
+                    if (indicators.length > 0) {
+                        const seriesData: any[] = [{
+                            value: values,
+                            name: '本班平均得分率',
+                            areaStyle: { color: 'rgba(66, 133, 244, 0.2)' },
+                            lineStyle: { color: '#4285F4' }
+                        }];
 
-                        if (indicators.length > 0) {
-                            chart3.setOption({
-                                title: { text: '能力素养雷达图', left: 'center' },
-                                tooltip: { trigger: 'item' },
-                                radar: {
-                                    indicator: indicators,
-                                    radius: '60%',
-                                    center: ['50%', '60%']
-                                },
-                                series: [{
-                                    type: 'radar',
-                                    data: [{
-                                        value: values,
-                                        name: '平均得分率',
-                                        areaStyle: { color: 'rgba(66, 133, 244, 0.2)' },
-                                        lineStyle: { color: '#4285F4' }
-                                    }]
-                                }]
+                        if (gradeStats && gradeStats.abilityStats) {
+                            const gradeValues = Object.keys(abilityStats).map(key => {
+                                const stat = gradeStats.abilityStats[key] || { earned: 0, total: 0 };
+                                return stat.total > 0 ? parseFloat(((stat.earned / stat.total) * 100).toFixed(1)) : 0;
                             });
-                        } else {
-                            chart3.setOption({
-                                title: { text: '能力素养雷达图 (暂无数据)', left: 'center', subtext: '未检测到题目关联的能力要素' }
+                            seriesData.push({
+                                value: gradeValues,
+                                name: '全年级平均得分率',
+                                areaStyle: { color: 'rgba(234, 67, 53, 0.2)' },
+                                lineStyle: { color: '#EA4335', type: 'dashed' }
                             });
                         }
+
+                        chart3.setOption({
+                            title: { text: '能力素养雷达图', left: 'center' },
+                            tooltip: { trigger: 'item' },
+                            legend: { data: seriesData.map(s => s.name), bottom: 0 },
+                            radar: {
+                                indicator: indicators,
+                                radius: '60%',
+                                center: ['50%', '50%']
+                            },
+                            series: [{
+                                type: 'radar',
+                                data: seriesData
+                            }]
+                        }, { notMerge: true });
                     } else {
                         chart3.setOption({
-                             title: { text: '能力素养雷达图 (暂无数据)', left: 'center' }
-                        });
+                            title: { text: '能力素养雷达图 (暂无数据)', left: 'center', subtext: '未检测到题目关联的能力要素' }
+                        }, { notMerge: true });
                     }
                 }
 
             } else {
-                // 学生模式
+                // 学生模式 (Keep existing logic, add notMerge: true)
+                // ... (Logic from previous file content) ...
                 // 1. 能力素养雷达图
                 if (chart1 && result["能力要素分析"]) {
-                    const mapLevelToScore = (lvl: string) => {
+                     // ... mapLevelToScore ...
+                     const mapLevelToScore = (lvl: string) => {
                         if (!lvl) return -1;
-                        // 1. 优先处理 "未涉及" / "未考查"
-                        if (lvl.includes('未涉及') || lvl.includes('未考查')) return -1; // -1 表示未考查
-                        
-                        // 2. 尝试提取具体数值 (如 "85%", "0%", "100%")
+                        if (lvl.includes('未涉及') || lvl.includes('未考查')) return -1;
                         const percentageMatch = lvl.match(/(\d+(\.\d+)?)%/);
-                        if (percentageMatch) {
-                            return parseFloat(percentageMatch[1]);
-                        }
-
-                        // 3. 静态映射兜底
+                        if (percentageMatch) return parseFloat(percentageMatch[1]);
                         if (lvl.includes('优秀')) return 95;
                         if (lvl.includes('良好')) return 80;
                         if (lvl.includes('一般')) return 60;
                         if (lvl.includes('薄弱')) return 40;
-                        
                         return 50;
                     };
 
@@ -367,15 +666,12 @@ const AnalysisCharts = ({ result, mode, studentRow, classAverages, fullScores, q
                         const subCats = result["能力要素分析"][cat];
                         if (subCats) {
                             Object.keys(subCats).forEach(key => {
-                                // 覆盖率检测：即使未覆盖也显示（值为0），但在报告中说明
                                 let score = mapLevelToScore(subCats[key]["掌握程度"]);
                                 const isUncovered = score === -1;
-                                
                                 if (isUncovered) {
                                     hasUncovered = true;
-                                    score = 0; // 图表上显示为0
+                                    score = 0;
                                 }
-
                                 indicators.push({ 
                                     name: key + (isUncovered ? '\n(未考查)' : ''), 
                                     max: 100, 
@@ -398,7 +694,7 @@ const AnalysisCharts = ({ result, mode, studentRow, classAverages, fullScores, q
                             radar: {
                                 indicator: indicators,
                                 radius: '60%',
-                                center: ['50%', '60%']
+                                center: ['50%', '50%']
                             },
                             series: [{
                                 type: 'radar',
@@ -409,13 +705,12 @@ const AnalysisCharts = ({ result, mode, studentRow, classAverages, fullScores, q
                                     lineStyle: { color: '#34A853' }
                                 }]
                             }]
-                        });
+                        }, { notMerge: true });
                     } else {
-                        // If no indicators (e.g. no coverage info or all filtered), maybe show empty or handle gracefully
                         chart1.clear();
                         chart1.setOption({
                             title: { text: '能力素养雷达图 (暂无数据)', left: 'center' }
-                        });
+                        }, { notMerge: true });
                     }
                 }
 
@@ -440,20 +735,16 @@ const AnalysisCharts = ({ result, mode, studentRow, classAverages, fullScores, q
                             itemStyle: { color: '#FBBC05' },
                             label: { show: true, position: 'top', formatter: '{c}%' }
                         }]
-                    });
+                    }, { notMerge: true });
                 }
                 
                 // 3. 个人得分 vs 班级平均 vs 满分 (折线图)
                 if (chart3 && studentRow && classAverages) {
                     const questions = Object.keys(classAverages);
-                    
                     const studentScores = questions.map(q => parseFloat(studentRow[q]) || 0);
                     const averageScores = questions.map(q => classAverages[q] || 0);
-                    
                     const fullScoresList = questions.map(q => {
-                         if (fullScores && fullScores[q] !== undefined) {
-                             return fullScores[q];
-                         }
+                         if (fullScores && fullScores[q] !== undefined) return fullScores[q];
                          const match = q.match(/[\(（](\d+)分?[\)）]/);
                          return match ? parseFloat(match[1]) : 10;
                     });
@@ -464,15 +755,10 @@ const AnalysisCharts = ({ result, mode, studentRow, classAverages, fullScores, q
                             type: 'line',
                             data: studentScores,
                             itemStyle: { color: '#34A853' },
-                            markPoint: {
-                                data: [
-                                    { type: 'max', name: 'Max' },
-                                    { type: 'min', name: 'Min' }
-                                ]
-                            }
+                            markPoint: { data: [{ type: 'max', name: 'Max' }, { type: 'min', name: 'Min' }] }
                         },
                         {
-                            name: '班级平均',
+                            name: '年级平均',
                             type: 'line',
                             data: averageScores,
                             itemStyle: { color: '#4285F4' },
@@ -492,54 +778,82 @@ const AnalysisCharts = ({ result, mode, studentRow, classAverages, fullScores, q
                     }
 
                     chart3.setOption({
-                        title: { text: '个人得分 vs 班级平均 vs 满分', left: 'center' },
-                        tooltip: { trigger: 'axis' },
-                        legend: { data: ['个人得分', '班级平均', '满分'], bottom: 0 },
-                        xAxis: { type: 'category', data: questions },
-                        yAxis: { type: 'value' },
-                        series: series
-                    });
-                }
-            }
-        } catch (e) {
+                                title: { text: '个人得分 vs 全员平均 vs 满分', left: 'center' },
+                                tooltip: { trigger: 'axis' },
+                                legend: { data: ['个人得分', '年级平均', '满分'], bottom: 0 },
+                                xAxis: { type: 'category', data: questions },
+                                yAxis: { type: 'value' },
+                                series: series
+                            }, { notMerge: true });
+                        }
+                    }
+                } catch (e) {
             console.error("Chart render error", e);
         }
-
-        return () => {
-            window.removeEventListener('resize', resizeHandler);
-            chart1?.dispose();
-            chart2?.dispose();
-            chart3?.dispose();
-        };
-    }, [result, mode, studentRow, classAverages, fullScores, questions]);
+    }, [result, mode, studentRow, classAverages, gradeAverages, fullScores, questions, showGradeComparison]);
 
     return (
-        <Grid container spacing={2} sx={{ mb: 4 }}>
-            <Grid item xs={12} md={6}>
-                <Card variant="outlined">
-                    <CardContent>
-                        <div ref={chart1Ref} style={{ width: '100%', height: '350px' }} />
-                    </CardContent>
-                </Card>
-            </Grid>
-            <Grid item xs={12} md={6}>
-                <Card variant="outlined">
-                    <CardContent>
-                        <div ref={chart2Ref} style={{ width: '100%', height: '350px' }} />
-                    </CardContent>
-                </Card>
-            </Grid>
-            {/* Class Mode Chart 3 or Student Mode Chart 3 */}
-            {(mode === 'student' || mode === 'class') && (
-                <Grid item xs={12} md={mode === 'class' ? 6 : 12}>
-                     <Card variant="outlined">
+        <Box sx={{ mb: 4 }} id="analysis-charts-container">
+            {mode === 'class' && gradeAverages && (
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+                     <FormControlLabel
+                         control={<Switch checked={showGradeComparison} onChange={e => setShowGradeComparison(e.target.checked)} />}
+                         label="显示全年级对比数据"
+                     />
+                </Box>
+            )}
+
+            {/* Header for Student Mode */}
+            {mode === 'student' && studentRow && (
+                <Box sx={{ mb: 2, p: 2, bgcolor: '#e3f2fd', borderRadius: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Box sx={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <Typography variant="subtitle1">
+                            <Box component="span" sx={{ fontWeight: 'bold', color: 'text.secondary' }}>班级:</Box> {studentRow.class_id || studentRow['班级'] || studentRow['class'] || '未分班'}
+                        </Typography>
+                        <Typography variant="subtitle1">
+                            <Box component="span" sx={{ fontWeight: 'bold', color: 'text.secondary' }}>姓名:</Box> {studentRow.student_id || studentRow['姓名'] || studentRow['name']}
+                        </Typography>
+                    </Box>
+                    {onDownloadPDF && (
+                        <Button 
+                            variant="outlined" 
+                            startIcon={<DownloadIcon />} 
+                            size="small" 
+                            onClick={onDownloadPDF}
+                            sx={{ bgcolor: 'white' }}
+                        >
+                            图表.pdf
+                        </Button>
+                    )}
+                </Box>
+            )}
+
+            <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                    <Card variant="outlined">
                         <CardContent>
-                            <div ref={chart3Ref} style={{ width: '100%', height: '350px' }} />
+                            <div ref={chart1Ref} style={{ width: '100%', height: '550px' }} />
                         </CardContent>
                     </Card>
                 </Grid>
-            )}
-        </Grid>
+                <Grid item xs={12} md={6}>
+                    <Card variant="outlined">
+                        <CardContent>
+                            <div ref={chart2Ref} style={{ width: '100%', height: '550px' }} />
+                        </CardContent>
+                    </Card>
+                </Grid>
+                {(mode === 'student' || mode === 'class') && (
+                    <Grid item xs={12} md={mode === 'class' ? 6 : 12}>
+                        <Card variant="outlined">
+                            <CardContent>
+                                <div ref={chart3Ref} style={{ width: '100%', height: '550px' }} />
+                            </CardContent>
+                        </Card>
+                    </Grid>
+                )}
+            </Grid>
+        </Box>
     );
 };
 
@@ -557,55 +871,115 @@ const ScoreDataOverview = ({ data, mode }: { data: any[], mode: 'class' | 'stude
         if (showLineChart) {
             // 准备折线图数据
             let questions: string[] = [];
-            let rawValues: number[] = [];
-            
-            if (data[0].hasOwnProperty('score_rate')) {
-                // 情况A: 已聚合数据
-                questions = data.map(d => d.question_id);
-                rawValues = data.map(d => parseFloat(d.score_rate));
-            } else {
-                // 情况B: 原始数据 -> 计算平均值
-                const questionKeys = Object.keys(data[0]).filter(k => k !== 'student_id' && k !== '姓名' && k !== '学号' && k !== 'name');
-                questions = questionKeys;
-                rawValues = questionKeys.map(key => {
-                     const validScores = data.map(r => parseFloat(r[key])).filter(v => !isNaN(v));
-                     return validScores.length ? validScores.reduce((a, b) => a + b, 0) / validScores.length : 0;
-                });
-            }
-            
-            // 智能判断数据类型
-            const maxVal = Math.max(...rawValues);
-            let displayValues = rawValues;
+            let series: any[] = [];
+            let legendData: string[] = [];
             let yAxisName = '得分率(%)';
-            let yAxisMax = 100;
-            let tooltipFormatter = '{c}%';
+            let yAxisMax: any = 100;
+            let tooltipFormatter: any = undefined;
 
-            if (maxVal <= 1) {
-                // 情况1: 0-1 小数 (如 0.85) -> 转换为百分比
-                displayValues = rawValues.map(v => parseFloat((v * 100).toFixed(2)));
-                yAxisName = '得分率(%)';
-                yAxisMax = 100;
-                tooltipFormatter = '{c}%';
-            } else if (maxVal <= 20) {
-                // 情况2: 可能是题目原始平均分 -> 显示原始分
-                displayValues = rawValues.map(v => parseFloat(v.toFixed(2)));
-                yAxisName = '平均得分';
-                yAxisMax = undefined as any; 
-                tooltipFormatter = '{c}分';
+            // Check for Wide Table format (rows = questions)
+            // Example: { question_id: "Q1", Grade: 0.85, A1: 0.80 ... }
+            const firstRow = data[0] || {};
+            const isWideTable = firstRow.hasOwnProperty('question_id') || firstRow.hasOwnProperty('题号');
+            
+            if (isWideTable) {
+                // --- New Logic for Multi-Class Comparison ---
+                questions = data.map(d => d.question_id || d['题号'] || `Q${d.id}`);
+                
+                // Exclude meta keys, BUT keep 'score_rate' (which represents Grade/Total)
+                const excludeKeys = ['question_id', '题号', '原始题号', 'full_score', 'id', 'meta', 'analysis', 'student_id', '姓名', '学号', 'name', 'class', '班级', 'class_id', 'average_score'];
+                let groupKeys = Object.keys(firstRow).filter(k => !excludeKeys.includes(k));
+                
+                // Avoid duplication: if 'Grade'/'年级' exists, exclude 'score_rate' (which is likely a system-generated duplicate)
+                // Also exclude 'average_score' explicitly if it sneaked in
+                const hasGrade = groupKeys.some(k => k === 'Grade' || k === '年级' || k === 'Overall' || k === '全体');
+                if (hasGrade) {
+                    groupKeys = groupKeys.filter(k => k !== 'score_rate' && k !== 'average_score');
+                }
+                
+                // Sort keys: Grade/年级/score_rate first, then Natural Sort
+                groupKeys.sort((a, b) => {
+                    const isGradeA = a === 'Grade' || a === '年级' || a === 'score_rate';
+                    const isGradeB = b === 'Grade' || b === '年级' || b === 'score_rate';
+                    if (isGradeA && !isGradeB) return -1;
+                    if (!isGradeA && isGradeB) return 1;
+                    return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+                });
+                
+                legendData = groupKeys.map(k => (k === 'Grade' || k === '年级' || k === 'score_rate') ? '全年级' : k);
+
+                series = groupKeys.map(key => {
+                    const rawData = data.map(d => {
+                        const val = parseFloat(d[key]);
+                        if (isNaN(val)) return 0;
+                        // Convert to percentage if <= 1
+                        return val <= 1.0 ? parseFloat((val * 100).toFixed(2)) : parseFloat(val.toFixed(2));
+                    });
+
+                    const name = (key === 'Grade' || key === '年级' || key === 'score_rate') ? '全年级' : key;
+
+                    return {
+                        name: name,
+                        type: 'line',
+                        data: rawData,
+                        smooth: true,
+                        symbol: 'circle',
+                        symbolSize: 6,
+                        // Grade gets special styling
+                        lineStyle: (key === 'Grade' || key === '年级' || key === 'score_rate') ? { width: 4 } : { width: 2 },
+                        itemStyle: (key === 'Grade' || key === '年级' || key === 'score_rate') ? { opacity: 1 } : { opacity: 0.8 },
+                        emphasis: { focus: 'series' }
+                    };
+                });
             } else {
-                // 情况3: 0-100 数值 -> 直接显示
-                displayValues = rawValues.map(v => parseFloat(v.toFixed(2)));
-                yAxisName = '得分率(%)';
-                yAxisMax = 100;
+                // --- Old/Fallback Logic ---
+                let rawValues: number[] = [];
+                
+                if (data[0].hasOwnProperty('score_rate')) {
+                    // 情况A: 已聚合数据
+                    questions = data.map(d => d.question_id);
+                    rawValues = data.map(d => parseFloat(d.score_rate));
+                } else {
+                    // 情况B: 原始数据 -> 计算平均值
+                    const questionKeys = Object.keys(data[0]).filter(k => 
+                        k !== 'student_id' && k !== '姓名' && k !== '学号' && k !== 'name' &&
+                        k !== 'class_id' && k !== 'class' && k !== '班级'
+                    );
+                    questions = questionKeys;
+                    rawValues = questionKeys.map(key => {
+                         const validScores = data.map(r => parseFloat(r[key])).filter(v => !isNaN(v));
+                         return validScores.length ? validScores.reduce((a, b) => a + b, 0) / validScores.length : 0;
+                    });
+                }
+                
+                // 智能判断数据类型
+                const maxVal = Math.max(...rawValues);
+                let displayValues = rawValues;
                 tooltipFormatter = '{c}%';
-            }
 
-            chart.setOption({
-                title: { text: '班级各题数据概览', left: 'center' },
-                tooltip: { trigger: 'axis' },
-                xAxis: { type: 'category', data: questions, boundaryGap: false }, // boundaryGap: false for line chart start from axis
-                yAxis: { type: 'value', max: yAxisMax, name: yAxisName },
-                series: [{
+                if (maxVal <= 1) {
+                    // 情况1: 0-1 小数 (如 0.85) -> 转换为百分比
+                    displayValues = rawValues.map(v => parseFloat((v * 100).toFixed(2)));
+                    yAxisName = '得分率(%)';
+                    yAxisMax = 100;
+                    tooltipFormatter = '{c}%';
+                } else if (maxVal <= 20) {
+                    // 情况2: 可能是题目原始平均分 -> 显示原始分
+                    displayValues = rawValues.map(v => parseFloat(v.toFixed(2)));
+                    yAxisName = '平均得分';
+                    yAxisMax = undefined as any; 
+                    tooltipFormatter = '{c}分';
+                } else {
+                    // 情况3: 0-100 数值 -> 直接显示
+                    displayValues = rawValues.map(v => parseFloat(v.toFixed(2)));
+                    yAxisName = '得分率(%)';
+                    yAxisMax = 100;
+                    tooltipFormatter = '{c}%';
+                }
+                
+                legendData = ['平均得分率'];
+                series = [{
+                    name: '平均得分率',
                     type: 'line',
                     smooth: true,
                     symbol: 'circle',
@@ -620,14 +994,32 @@ const ScoreDataOverview = ({ data, mode }: { data: any[], mode: 'class' | 'stude
                             { offset: 1, color: 'rgba(66, 133, 244, 0.1)' }
                         ])
                     }
-                }]
+                }];
+            }
+
+            chart.setOption({
+                title: { text: isWideTable ? '各班级/年级得分率对比' : '班级各题数据概览', left: 'center' },
+                tooltip: { trigger: 'axis' },
+                legend: {
+                    data: legendData,
+                    top: 30,
+                    type: 'scroll'
+                },
+                xAxis: { type: 'category', data: questions, boundaryGap: false }, 
+                yAxis: { type: 'value', max: yAxisMax, name: yAxisName },
+                series: series,
+                grid: { top: 80, left: '3%', right: '4%', bottom: '3%', containLabel: true },
             });
 
         } else {
             // 绘制学生数据的热力图
             const studentIds = data.slice(0, 30).map((row, idx) => row['student_id'] || row['姓名'] || `S${idx+1}`);
             const allKeys = Object.keys(data[0]);
-            const questionKeys = allKeys.filter(k => k !== 'student_id' && k !== '姓名' && k !== '学号' && k !== 'name');
+            // Updated exclusion list for heatmap keys
+            const questionKeys = allKeys.filter(k => 
+                k !== 'student_id' && k !== '姓名' && k !== '学号' && k !== 'name' &&
+                k !== 'class_id' && k !== 'class' && k !== '班级'
+            );
             
             const heatmapData: any[] = [];
             let globalMaxScore = 0; // Find max score for dynamic visualMap
@@ -645,7 +1037,7 @@ const ScoreDataOverview = ({ data, mode }: { data: any[], mode: 'class' | 'stude
             if (globalMaxScore === 0) globalMaxScore = 10;
 
             chart.setOption({
-                title: { text: '班级得分分布热力图 (前30名学生)', left: 'center' },
+                title: { text: '全员得分分布热力图 (前30名学生)', left: 'center' },
                 tooltip: { position: 'top' },
                 grid: { height: '70%', top: '15%' },
                 xAxis: { type: 'category', data: questionKeys, splitArea: { show: true } },
@@ -770,8 +1162,15 @@ const markdownComponents = {
 
 // --- Structured Recommendation Components ---
 
-const WeaknessCardItem = ({ item, mode, onGenerateVariant, questions }: { item: any, mode: 'class' | 'student', onGenerateVariant?: (item: any) => void, questions?: any[] }) => {
+const WeaknessCardItem = ({ item, mode, onGenerateVariant, questions, expandTrigger }: { item: any, mode: 'class' | 'student', onGenerateVariant?: (item: any) => void, questions?: any[], expandTrigger?: number }) => {
     const [expanded, setExpanded] = useState(false);
+
+    // Sync internal state with trigger
+    useEffect(() => {
+        if (expandTrigger !== undefined && expandTrigger > 0) {
+            setExpanded(true);
+        }
+    }, [expandTrigger]);
     
     // Class Mode Fields: 题号, 难度等级, 核心能力要素, 得分率, 问题诊断, 教学建议, 推荐训练题型, 变式训练思路
     // Student Mode Fields: 题号, 错误类型, 根本原因, 纠正建议, 推荐复习题型, 变式训练建议
@@ -918,34 +1317,161 @@ const WeaknessCardItem = ({ item, mode, onGenerateVariant, questions }: { item: 
     );
 };
 
-const WeaknessCards = ({ result, mode, onDownloadMD, onDownloadPDF, onGenerateVariant, onGenerateRemedial, questions }: { 
+const WeaknessCards = ({ result, mode, onDownloadMD, onDownloadPDF, onDownloadFull, onGenerateVariant, onGenerateRemedial, questions, studentRow, isExporting, exportProgress }: { 
     result: any, 
     mode: 'class' | 'student',
     onDownloadMD?: () => void,
     onDownloadPDF?: () => void,
+    onDownloadFull?: () => void,
     onGenerateVariant?: (item: any) => void,
     onGenerateRemedial?: () => void,
-    questions?: any[]
+    questions?: any[],
+    studentRow?: any,
+    isExporting?: boolean,
+    exportProgress?: string
 }) => {
+    // If result is a multi-group map, we need to select which group to display
+    // However, WeaknessCards is usually rendered inside AnalysisResult or below it.
+    // If it's passed the *whole* multi-group result, it needs to handle it.
+    // But currently AnalysisResult handles the selection. 
+    // Wait, WeaknessCards is rendered separately in the main view?
+    // Let's check where WeaknessCards is used.
+    // It is NOT used in the main view anymore (it was refactored into AnalysisResult in previous versions or I missed it).
+    // Let's check the render part of ScoreAnalysisView.
+    
+    // Ah, WeaknessCards is likely used INSIDE AnalysisResult in some versions, or parallel to it.
+    // Let's assume it receives a SINGLE result object (for the selected group).
+    // If result has keys like 'Grade', 'Class1', then it is multi-group.
+    
+    const [selectedGroup, setSelectedGroup] = useState<string>('');
+    const [isPreparing, setIsPreparing] = useState(false);
+    
+    const isMultiGroup = useMemo(() => {
+        if (!result || typeof result !== 'object') return false;
+        if (result["总体分析"] || result["知识主题掌握情况"] || result["能力短板诊断"]) return false;
+        const keys = Object.keys(result);
+        if (keys.length === 0) return false;
+        const firstVal = result[keys[0]];
+        return firstVal && (firstVal["总体分析"] || firstVal["markdown_report"]);
+    }, [result]);
+
+    const groupNames = useMemo(() => {
+        if (!isMultiGroup) return [];
+        return Object.keys(result).sort((a, b) => {
+             const isGradeA = a === 'score_rate' || a.includes('年级') || a.includes('Grade');
+             const isGradeB = b === 'score_rate' || b.includes('年级') || b.includes('Grade');
+             if (isGradeA && !isGradeB) return -1;
+             if (!isGradeA && isGradeB) return 1;
+             return a.localeCompare(b, undefined, { numeric: true });
+        });
+    }, [result, isMultiGroup]);
+
+    useEffect(() => {
+        if (isMultiGroup && groupNames.length > 0 && !selectedGroup) {
+            setSelectedGroup(groupNames[0]);
+        }
+    }, [isMultiGroup, groupNames]);
+
+    const displayResult = isMultiGroup ? result[selectedGroup] : result;
+
+    // Helper to get friendly name
+    const getFriendlyName = (name: string) => {
+        if (name === 'score_rate') return '全年级';
+        return name;
+    };
+
     // Extract weakness items based on mode
     let items: any[] = [];
     
-    if (mode === 'class') {
-        items = result["能力短板诊断"] || [];
-    } else {
-        items = result["错题分析"] || [];
+    if (displayResult) {
+        if (mode === 'class') {
+            items = displayResult["能力短板诊断"] || [];
+        } else {
+            items = displayResult["错题分析"] || [];
+        }
     }
     
+    // State to control expansion of all cards for PDF generation (now using trigger counter)
+    const [expandTrigger, setExpandTrigger] = useState(0);
+
+    // Modified PDF download handler
+    const handleDownloadPDFWrapper = async () => {
+        setExpandTrigger(prev => prev + 1);
+        // Wait for state update and animation
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        if (onDownloadPDF) {
+            await onDownloadPDF();
+        }
+    };
+
+    // New: Full Export Handler
+    const handleFullExport = async () => {
+        setIsPreparing(true);
+        setExpandTrigger(prev => prev + 1);
+        // Wait for expansion animation
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        if (onDownloadFull) {
+            await onDownloadFull();
+        }
+        setIsPreparing(false);
+    };
+
     if (!items || items.length === 0) return null;
 
     return (
         <Box sx={{ mt: 4 }} id="weakness-cards-container">
+            {/* Header for Student Mode */}
+            {mode === 'student' && studentRow && (
+                <Box sx={{ mb: 2, p: 2, bgcolor: '#e3f2fd', borderRadius: 2, display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <Typography variant="subtitle1">
+                        <Box component="span" sx={{ fontWeight: 'bold', color: 'text.secondary' }}>班级:</Box> {studentRow.class_id || studentRow['班级'] || studentRow['class'] || '未分班'}
+                    </Typography>
+                    <Typography variant="subtitle1">
+                        <Box component="span" sx={{ fontWeight: 'bold', color: 'text.secondary' }}>姓名:</Box> {studentRow.student_id || studentRow['姓名'] || studentRow['name']}
+                    </Typography>
+                </Box>
+            )}
+
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, color: '#1976d2', fontWeight: 'bold', mb: 0 }}>
-                    <LightbulbIcon color="warning" />
-                    {mode === 'class' ? '薄弱点智能诊断与训练建议' : '错题深度诊断与个性化提升'}
-                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                    <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, color: '#1976d2', fontWeight: 'bold', mb: 0 }}>
+                        <LightbulbIcon color="warning" />
+                        {mode === 'class' ? '薄弱点智能诊断与训练建议' : '错题深度诊断与个性化提升'}
+                    </Typography>
+                    
+                    {/* Group Selector for Weakness Cards if Multi-Group */}
+                    {isMultiGroup && (
+                        <Select
+                            value={selectedGroup}
+                            onChange={(e) => setSelectedGroup(e.target.value)}
+                            size="small"
+                            sx={{ minWidth: 150, height: 32 }}
+                        >
+                            {groupNames.map(name => (
+                                <MenuItem key={name} value={name}>
+                                    {getFriendlyName(name)}
+                                </MenuItem>
+                            ))}
+                        </Select>
+                    )}
+                </Box>
+
                 <Stack direction="row" spacing={1}>
+                    {onDownloadFull && (
+                        <Button 
+                            variant="contained" 
+                            color="primary" 
+                            startIcon={isExporting || isPreparing ? <CircularProgress size={20} color="inherit" /> : <PictureAsPdfIcon />} 
+                            size="small" 
+                            onClick={handleFullExport}
+                            disabled={isExporting || isPreparing}
+                            sx={{ fontWeight: 'bold', boxShadow: 2, mr: 1 }}
+                        >
+                            {isExporting ? `生成中 ${exportProgress || ''}` : (isPreparing ? "准备中..." : "一键导出完整报告")}
+                        </Button>
+                    )}
                     {onGenerateRemedial && (
                          <Button 
                              variant="contained" 
@@ -964,7 +1490,7 @@ const WeaknessCards = ({ result, mode, onDownloadMD, onDownloadPDF, onGenerateVa
                         </Button>
                     )}
                     {onDownloadPDF && (
-                        <Button variant="outlined" startIcon={<DownloadIcon />} size="small" onClick={onDownloadPDF}>
+                        <Button variant="outlined" startIcon={<DownloadIcon />} size="small" onClick={handleDownloadPDFWrapper}>
                             .pdf
                         </Button>
                     )}
@@ -973,7 +1499,13 @@ const WeaknessCards = ({ result, mode, onDownloadMD, onDownloadPDF, onGenerateVa
             <Grid container spacing={2}>
                 {items.map((item, idx) => (
                     <Grid item xs={12} md={6} lg={4} key={idx}>
-                        <WeaknessCardItem item={item} mode={mode} onGenerateVariant={onGenerateVariant} questions={questions} />
+                        <WeaknessCardItem 
+                            item={item} 
+                            mode={mode} 
+                            onGenerateVariant={onGenerateVariant} 
+                            questions={questions} 
+                            expandTrigger={expandTrigger}
+                        />
                     </Grid>
                 ))}
             </Grid>
@@ -1003,7 +1535,15 @@ const initialSessionState: AnalysisSessionState = {
     analysisStartTime: null
 };
 
-export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions, modelConfigs }) => {
+export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions: propQuestions, modelConfigs: propModelConfigs }) => {
+    // 历史记录状态覆盖 (用于查看历史记录时临时替换当前的题目和配置)
+    const [historyQuestions, setHistoryQuestions] = useState<Question[] | null>(null);
+    const [historyModelConfigs, setHistoryModelConfigs] = useState<ModelConfig[] | null>(null);
+
+    // 实际使用的题目和配置 (优先使用历史记录中的数据)
+    const questions = historyQuestions || propQuestions;
+    const modelConfigs = historyModelConfigs || propModelConfigs;
+
     // const [selectedConfigId, setSelectedConfigId] = useState<number>(modelConfigs.length > 0 ? modelConfigs[0].id : 1);
     
     // const selectedConfig = useMemo(() => 
@@ -1024,6 +1564,10 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
     const [remedialProgress, setRemedialProgress] = useState(0);
     const [remedialResults, setRemedialResults] = useState<any[]>([]);
     const [remedialTab, setRemedialTab] = useState(0); // 0: Question Paper, 1: Answer Key
+
+    // Full Export State
+    const [exporting, setExporting] = useState(false);
+    const [exportProgressText, setExportProgressText] = useState('');
 
     // Independent session states
     const [classSession, setClassSession] = useState<AnalysisSessionState>(initialSessionState);
@@ -1070,8 +1614,104 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
     const setAnalysisStartTime = (t: number | null) => setSession(prev => ({ ...prev, analysisStartTime: t }));
 
     const [uploading, setUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
     const [activeModelTab, setActiveModelTab] = useState<number>(0); // Store configId
     const [helpOpen, setHelpOpen] = useState(false);
+    const [historyOpen, setHistoryOpen] = useState(false);
+
+    // 手动保存分析结果
+    const handleSaveSession = async () => {
+        if (tasks.length === 0) return;
+        
+        // 检查是否有成功的任务
+        const hasSuccess = tasks.some(t => t.status === 'success');
+        if (!hasSuccess) {
+            alert("没有有效的分析结果可保存。");
+            return;
+        }
+
+        const session: RatingSession = {
+            id: String(Date.now()),
+            examName: file ? file.name : `智能分析_${new Date().toLocaleString()}`,
+            createdAt: new Date().toISOString(),
+            analysisMode: mode,
+            modelConfigs: modelConfigs,
+            questions: questions,
+            scoreData: scoreData,
+            type: 'score_analysis', // Add type for filtering
+            analysisResult: tasks.reduce((acc, t) => {
+                // 按 subjectId (id) 分组
+                if (!acc[t.id]) acc[t.id] = {};
+                acc[t.id] = t.result;
+                return acc;
+            }, {} as any),
+            schemaVersion: 1
+        };
+
+        try {
+            await saveSessionToIndexedDB(session, 5);
+            alert("分析结果保存成功！");
+        } catch (err) {
+            console.error("Save failed", err);
+            alert("保存失败：" + err);
+        }
+    };
+
+    const handleLoadHistory = (session: RatingSession) => {
+        if (session.scoreData) {
+            setScoreData(session.scoreData);
+            setPreviewData(session.scoreData);
+
+            // 尝试从历史数据中恢复满分设置
+            const restoredFullScores: Record<string, number> = {};
+            if (session.analysisMode === 'class') {
+                session.scoreData.forEach((row: any, idx: number) => {
+                    const qId = row.question_id || row['题号'] || `Q${idx + 1}`;
+                    const full = parseFloat(row.full_score || row['满分']);
+                    if (!isNaN(full)) restoredFullScores[qId] = full;
+                });
+            }
+            if (Object.keys(restoredFullScores).length > 0) {
+                setFullScores(restoredFullScores);
+            }
+        }
+        if (session.analysisMode) setMode(session.analysisMode as any);
+        
+        // 恢复题目和配置信息（如果有）
+        if (session.questions && session.questions.length > 0) {
+            setHistoryQuestions(session.questions);
+        }
+        if (session.modelConfigs && session.modelConfigs.length > 0) {
+            setHistoryModelConfigs(session.modelConfigs);
+        }
+
+        if (session.analysisResult) {
+            // 重建任务列表
+            // 这里简化处理，假设结果中每个科目对应一个任务
+            const newTasks: TaskInfo[] = [];
+            
+            // 优先使用历史记录中的配置，否则使用当前配置
+            const configsToUse = (session.modelConfigs && session.modelConfigs.length > 0) 
+                ? session.modelConfigs 
+                : modelConfigs;
+
+            Object.entries(session.analysisResult).forEach(([subjectId, result]) => {
+                // 使用第一个可用配置恢复
+                const config = configsToUse[0];
+                if (config) {
+                    newTasks.push({
+                        id: subjectId,
+                        modelLabel: config.label,
+                        configId: config.id,
+                        taskId: `restored-${subjectId}`,
+                        status: 'success',
+                        result: result
+                    });
+                }
+            });
+            setTasks(newTasks);
+        }
+    };
     
     // 元数据覆盖状态: qId -> modelLabel -> fields
     // 用于存储用户在界面上手动修正的题目元数据（难度、主题、能力）
@@ -1081,6 +1721,73 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
         difficulty: string 
     }>>>({});
     const [metaAccordionExpanded, setMetaAccordionExpanded] = useState(false);
+    
+    // --- Pagination & Display Logic ---
+    const [page, setPage] = useState(0);
+    const [rowsPerPage, setRowsPerPage] = useState(10);
+    const [originalHeaders, setOriginalHeaders] = useState<string[]>([]);
+    const [headerMap, setHeaderMap] = useState<Record<string, string>>({}); // Original -> Qx (system ID)
+
+    const handleChangePage = (_event: unknown, newPage: number) => {
+        setPage(newPage);
+    };
+
+    const handleChangeRowsPerPage = (event: React.ChangeEvent<HTMLInputElement>) => {
+        setRowsPerPage(parseInt(event.target.value, 10));
+        setPage(0);
+    };
+
+    // Optimize performance for Student Mode by limiting rows per page
+    useEffect(() => {
+        if (mode === 'student') {
+            setRowsPerPage(5);
+        } else {
+            setRowsPerPage(10);
+        }
+        setPage(0);
+    }, [mode]);
+
+    // Column collapse state for Student Mode
+    const [collapsedColumns, setCollapsedColumns] = useState(true);
+
+    // Filter headers for display
+    const getDisplayHeaders = (headers: string[]) => {
+        if (mode !== 'student' || !collapsedColumns) return headers;
+        
+        // Always keep basic info
+        const basicCols = ['student_id', '姓名', '学号', 'class_id', '班级', 'class'];
+        
+        // Find Q1-Q10 columns
+        const qCols: string[] = [];
+        const otherCols: string[] = [];
+        
+        headers.forEach(h => {
+            const key = headerMap[h] || h;
+            if (basicCols.includes(key)) {
+                // Already handled
+            } else if (key.match(/^Q([1-9]|10)$/) || key.match(/^Q([1-9]|10)\D/)) {
+                qCols.push(h);
+            } else {
+                otherCols.push(h);
+            }
+        });
+        
+        // Filter: Keep basic cols + Q1-Q10 + first few others if needed?
+        // Actually, just keep all basic cols found in headers, plus Q1-Q10.
+        return headers.filter(h => {
+            const key = headerMap[h] || h;
+            if (basicCols.includes(key)) return true;
+            if (key.match(/^Q([1-9]|10)$/)) return true; // Exact match Q1-Q10
+            if (key.match(/^Q([1-9]|10)\D/)) return true; // Match Q1(xx), Q10(xx)
+            // Also keep 'full_score' or '满分' related? No, those are rows usually.
+            return false;
+        });
+    };
+
+    const displayHeaders = useMemo(() => {
+        const baseHeaders = originalHeaders.length > 0 ? originalHeaders : (previewData[0] ? Object.keys(previewData[0]) : []);
+        return getDisplayHeaders(baseHeaders);
+    }, [originalHeaders, previewData, mode, collapsedColumns]);
 
     // 初始化/同步元数据覆盖状态
     // 当题目或模型配置变化时，自动填充初始值，确保每个模型都有独立的数据副本
@@ -1188,27 +1895,74 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
             setScoreData([]);
             setPreviewData([]);
             setTasks([]);
+            
+            // 退出历史查看模式
+            setHistoryQuestions(null);
+            setHistoryModelConfigs(null);
         }
     };
 
     const handleUpload = async () => {
         if (!file) return;
         setUploading(true);
+        setUploadProgress(0);
         const formData = new FormData();
         formData.append('file', file);
         formData.append('mode', mode);
 
         try {
-            const response = await axios.post('http://127.0.0.1:8000/api/score/upload', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
+            const response = await axios.post('/api/score/upload', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+                onUploadProgress: (progressEvent) => {
+                    if (progressEvent.total) {
+                        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                        setUploadProgress(percentCompleted);
+                    }
+                }
             });
             // Backend returns { data: [...], count: N, columns: [...], full_scores: {...} }
             let parsedData = response.data.data;
-            let fullScoresRaw = response.data.full_scores || {};
+            let fullScoresRaw: Record<string, any> = response.data.full_scores || {};
             let remappedFullScores: Record<string, number> = {};
             
             // --- Normalization Logic: Unify Question IDs to Q1, Q2... ---
             if (parsedData.length > 0) {
+                // Check if data is in "Long Format" (Melted) and needs to be pivoted back to "Wide Format" for preview
+                // This happens when backend detects multi-class data and melts it, but we want to display/edit it as a table.
+                if (parsedData[0].hasOwnProperty('group_name') && parsedData[0].hasOwnProperty('score_rate')) {
+                    // Check if it's likely a Wide Table (Melted)
+                    // In Wide Table, the group names (values in 'group_name' field) correspond to Column Headers.
+                    const originalColumns = response.data.columns || [];
+                    const sampleGroup = parsedData[0].group_name;
+                    const isWideMelted = originalColumns.includes(sampleGroup);
+
+                    if (isWideMelted) {
+                        const pivotedMap = new Map<string, any>();
+                        
+                        parsedData.forEach((item: any) => {
+                            // Use question_id as key
+                            const qId = item.question_id;
+                            if (!pivotedMap.has(qId)) {
+                                pivotedMap.set(qId, {
+                                    question_id: qId,
+                                    full_score: item.full_score,
+                                    // Preserve other non-group fields if any
+                                    ...Object.fromEntries(Object.entries(item).filter(([k]) => !['group_name', 'score_rate', 'average_score'].includes(k)))
+                                });
+                            }
+                            
+                            const row = pivotedMap.get(qId);
+                            if (item.group_name) {
+                                // Map group_name back to column key
+                                row[item.group_name] = item.score_rate;
+                            }
+                        });
+                        
+                        // Replace parsedData with pivoted data
+                        parsedData = Array.from(pivotedMap.values());
+                    }
+                }
+
                 // Heuristic to detect Class Mode (Aggregated) vs Student Mode (Raw)
                 // Class mode usually has 'question_id' or '题号' column
                 const isClassMode = parsedData[0].hasOwnProperty('question_id') || parsedData[0].hasOwnProperty('题号');
@@ -1216,17 +1970,97 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                 if (isClassMode) {
                     // Class Mode: Each row is a question.
                     // We enforce Q1, Q2... based on row order to match Metadata order.
-                    parsedData = parsedData.map((row: any, idx: number) => ({
-                        ...row,
-                        question_id: `Q${idx + 1}`,
-                        '题号': `Q${idx + 1}`
-                    }));
+                    parsedData = parsedData.map((row: any, idx: number) => {
+                        const qId = `Q${idx + 1}`;
+                        
+                        // Try to find matching question metadata by index to get the REAL original ID
+                        const matchingMetaQ = questions && questions[idx];
+                        const metaOriginalId = matchingMetaQ ? matchingMetaQ.id : null;
+
+                        // Fallback to uploaded row ID if metadata not available (though less reliable per user req)
+                        const rowOriginalId = row.question_id || row['题号'] || row['题目编号'] || row.id || '';
+                        
+                        // User specifically requested the ID from "Difficulty Rating Summary Table" (which corresponds to 'questions' prop)
+                        const displayOriginalId = metaOriginalId || rowOriginalId;
+
+                        // Extract full score if available to ensure AnalysisCharts has correct denominator
+                        const full = parseFloat(row.full_score || row['满分']);
+                        if (!isNaN(full)) {
+                            remappedFullScores[qId] = full;
+                        }
+                        return {
+                            ...row,
+                            question_id: qId,
+                            '题号': qId,
+                            '原始题号': displayOriginalId // Store original ID for display
+                        };
+                    });
+
+                    // Ensure 'question_id' is in the columns list for display so users can map it to Q1, Q2...
+                    if (response.data.columns) {
+                         if (!response.data.columns.includes('question_id')) {
+                             response.data.columns.unshift('question_id');
+                         }
+                         // Add '原始题号' column if not present, right after question_id
+                         if (!response.data.columns.includes('原始题号')) {
+                             const qIdx = response.data.columns.indexOf('question_id');
+                             response.data.columns.splice(qIdx + 1, 0, '原始题号');
+                         }
+                    }
                 } else {
                     // Student Mode: Each row is a student, columns are questions.
+                    
+                    // --- Full Score Row Detection (Row 2 check) ---
+                    // If the second row (index 0 in parsedData if header=true) has '满分' in student_id column
+                    let fullScoreRowIndex = -1;
+                    
+                    // Possible student ID keys
+                    const studentKeys = ['student_id', 'name', '姓名', '学号'];
+                    
+                    // Check first few rows for "Full Score" indicator
+                    for (let i = 0; i < Math.min(parsedData.length, 3); i++) {
+                         const row = parsedData[i];
+                         // Check student_id column for "满分"
+                         const sKey = Object.keys(row).find(k => studentKeys.includes(k) || k === 'student_id');
+                         if (sKey && (row[sKey] === '满分' || row[sKey] === 'Full Score')) {
+                             fullScoreRowIndex = i;
+                             break;
+                         }
+                         // Also check 2nd column by index if keys are generic
+                         const vals = Object.values(row) as any[];
+                         if (vals[1] === '满分' || vals[1] === 'Full Score') {
+                             fullScoreRowIndex = i;
+                             break;
+                         }
+                    }
+
+                    if (fullScoreRowIndex !== -1) {
+                        const fsRow = parsedData[fullScoreRowIndex];
+                        // Extract full scores
+                        // We'll map them later when we know the Q-columns, but store raw for now
+                        Object.keys(fsRow).forEach(k => {
+                            const val = parseFloat(fsRow[k]);
+                            if (!isNaN(val)) {
+                                fullScoresRaw[k] = val;
+                            }
+                        });
+                        // Remove full score row from data
+                        parsedData.splice(fullScoreRowIndex, 1);
+                    }
+
                     // Identify question columns and rename them to Q1, Q2...
+                    if (!parsedData || parsedData.length === 0) {
+                        throw new Error("有效数据为空");
+                    }
                     const firstRow = parsedData[0];
                     const keys = Object.keys(firstRow);
-                    const nonQKeys = ['student_id', 'name', '姓名', '学号', 'class', '班级', 'rank', '排名'];
+                    
+                    // Possible keys for metadata columns
+                    const classKeys = ['class', '班级', 'class_id'];
+                    // studentKeys already defined above
+                    const rankKeys = ['rank', '排名'];
+                    
+                    const nonQKeys = [...classKeys, ...studentKeys, ...rankKeys];
                     
                     // Filter and sort/preserve order of question keys
                     // We assume the file columns are in correct order relative to metadata
@@ -1234,9 +2068,12 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                     
                     // Create mapping
                     const keyMap: Record<string, string> = {};
+                    const headerMapRev: Record<string, string> = {}; // Original -> System
+                    
                     qKeys.forEach((key, idx) => {
                         const newKey = `Q${idx + 1}`;
                         keyMap[key] = newKey;
+                        headerMapRev[key] = newKey;
                         
                         // Map full scores using the same key
                         if (fullScoresRaw[key] !== undefined) {
@@ -1244,20 +2081,48 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                         }
                     });
                     
+                    // Add mapping for Student ID and Class ID if found
+                    const sCol = keys.find(k => studentKeys.includes(k));
+                    if (sCol) {
+                        headerMapRev[sCol] = 'student_id'; // Standardize internal key
+                    }
+                    
+                    const cCol = keys.find(k => classKeys.includes(k));
+                    if (cCol) {
+                        headerMapRev[cCol] = 'class_id'; // Standardize internal key
+                    }
+
+                    setHeaderMap(headerMapRev);
+
                     parsedData = parsedData.map((row: any) => {
                         const newRow: any = {};
                         // Preserve non-question keys as is, map question keys
+                        // Also explicitly map class and student columns to standard keys
+                        if (cCol && row[cCol] !== undefined) {
+                            newRow['class_id'] = row[cCol];
+                        }
+                        if (sCol && row[sCol] !== undefined) {
+                            newRow['student_id'] = row[sCol];
+                        }
+
                         Object.keys(row).forEach(k => {
                             if (keyMap[k]) {
                                 newRow[keyMap[k]] = row[k];
                             } else {
-                                newRow[k] = row[k];
+                                // If not mapped to Qx, and not already handled (like class/student which we handled above)
+                                // actually we can just keep them. But we want to prefer our standardized keys.
+                                if (k !== cCol && k !== sCol) {
+                                     newRow[k] = row[k];
+                                }
                             }
                         });
                         return newRow;
                     });
                 }
             }
+            
+            // Store original columns for display order
+            setOriginalHeaders(response.data.columns || []);
 
             setScoreData(parsedData);
             setPreviewData(parsedData); // Use same data for preview for now
@@ -1274,6 +2139,9 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
 
     // --- Retry Handler ---
     const handleRetryTask = async (failedTask: TaskInfo) => {
+        // 先停止之前的轮询
+        setAnalyzing(false);
+        
         const config = modelConfigs.find(c => c.id === failedTask.configId);
         if (!config) {
             alert("找不到对应的模型配置，无法重试。");
@@ -1318,6 +2186,12 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
             baseQ.id = systemId;
             (baseQ as any)['题号'] = systemId;
             
+            // Inject full score from CSV if available (Critical for correct analysis stats)
+            if (fullScores && fullScores[systemId] !== undefined) {
+                baseQ.full_score = fullScores[systemId];
+                (baseQ as any)['满分'] = fullScores[systemId];
+            }
+
             if (analysisResult) {
                 Object.assign(baseQ, analysisResult);
             }
@@ -1347,17 +2221,22 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
             return baseQ;
         });
 
-        // 更新状态为 pending
+        // 更新状态为 pending，并设置临时 ID 防止轮询冲突
         setTasks(prev => prev.map(t => {
             if (t.taskId === failedTask.taskId) {
-                return { ...t, status: 'pending', error: undefined };
+                return { 
+                    ...t, 
+                    status: 'pending', 
+                    error: undefined,
+                    taskId: `retrying_${failedTask.taskId}` // 使用前缀让轮询跳过
+                };
             }
             return t;
         }));
         setAnalyzing(true);
 
         try {
-            const response = await axios.post('http://127.0.0.1:8000/api/score/analyze', {
+            const response = await axios.post('/api/score/analyze', {
                 score_data: targetScoreData,
                 question_data: modelSpecificQuestions,
                 mode: mode,
@@ -1375,7 +2254,8 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
             if (newTasksRaw.length > 0) {
                 const newTaskRaw = newTasksRaw[0];
                 setTasks(prev => prev.map(t => {
-                    if (t.taskId === failedTask.taskId) {
+                    // Match either the original ID or the temporary retrying ID
+                    if (t.taskId === failedTask.taskId || t.taskId === `retrying_${failedTask.taskId}`) {
                          return {
                             ...t,
                             taskId: newTaskRaw.task_id,
@@ -1389,7 +2269,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
             console.error("Retry failed", error);
             const msg = error.response?.data?.detail || error.message || "Retry failed";
             setTasks(prev => prev.map(t => {
-                if (t.taskId === failedTask.taskId) {
+                if (t.taskId === failedTask.taskId || t.taskId === `retrying_${failedTask.taskId}`) {
                     return { ...t, status: 'failure', error: msg };
                 }
                 return t;
@@ -1405,120 +2285,248 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
         setTasks([]);
         setSelectedResultId(null);
 
+        // Helper to prepare questions for a specific model config
+        const prepareQuestionsForConfig = (config: any) => {
+            return questions.map((q, idx) => {
+                const analysisResult = q.analysis?.[config.label];
+                const override = metaOverrides[q.id]?.[config.label];
+                
+                let overrideAbilities: string[] | undefined = undefined;
+                if (override?.ability_elements) {
+                    overrideAbilities = String(override.ability_elements)
+                        .replace(/，/g, ',')
+                        .split(',')
+                        .map(s => s.trim())
+                        .filter(s => s);
+                }
+
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const baseQ: any = { ...q };
+                
+                const systemId = `Q${idx + 1}`;
+                
+                if (!baseQ.meta) baseQ.meta = {};
+                baseQ.meta.original_id = baseQ.id;
+
+                baseQ.id = systemId;
+                (baseQ as any)['题号'] = systemId;
+                
+                // Inject full score from CSV if available (Critical for correct analysis stats)
+                if (fullScores && fullScores[systemId] !== undefined) {
+                    baseQ.full_score = fullScores[systemId];
+                    (baseQ as any)['满分'] = fullScores[systemId];
+                }
+
+                if (analysisResult) {
+                    Object.assign(baseQ, analysisResult);
+                }
+
+                if (override) {
+                    if (override.framework_topic) {
+                        (baseQ as any).framework_topic = override.framework_topic;
+                        (baseQ as any).knowledge_topic = override.framework_topic;
+                        if (!(baseQ as any).meta) (baseQ as any).meta = {};
+                        (baseQ as any).meta.framework_topic = override.framework_topic;
+                        (baseQ as any).meta.knowledge_topic = override.framework_topic;
+                    }
+                    if (overrideAbilities) {
+                        (baseQ as any).ability_elements = overrideAbilities;
+                        if (!(baseQ as any).meta) (baseQ as any).meta = {};
+                        (baseQ as any).meta.ability_elements = overrideAbilities;
+                    }
+                    if (override.difficulty) {
+                            (baseQ as any).final_level = override.difficulty;
+                            if ((baseQ as any).comprehensive_rating) {
+                                (baseQ as any).comprehensive_rating.final_level = override.difficulty;
+                            } else {
+                                (baseQ as any).comprehensive_rating = { final_level: override.difficulty };
+                            }
+                    }
+                }
+
+                return baseQ;
+            });
+        };
+
         try {
-            // const allNewTasks: TaskInfo[] = [];
+            let isMultiGroupMode = false;
+            let sortedGroups: string[] = [];
+            let meltedData: any[] = [];
 
-            // 多模型并发分析
-            const analysisPromises = modelConfigs.map(async (config) => {
-                // 准备模型特定的题目上下文
-                // 提取当前模型对应的修正数据（难度、主题等）并合并到题目对象中
-                const modelSpecificQuestions = questions.map((q, idx) => {
-                    const analysisResult = q.analysis?.[config.label];
-                    const override = metaOverrides[q.id]?.[config.label];
+            // 1. Detect Mode and Melt Data if necessary (Wide -> Long)
+            if (mode === 'class' && scoreData.length > 0) {
+                const firstRow = scoreData[0];
+                // Modified condition: Allow melting even if 'score_rate' exists (it might be the Grade column added by backend)
+                // As long as it's not already in Long Format (which has 'group_name')
+                if (!firstRow.hasOwnProperty('group_name')) {
+                    const excludeKeys = ['question_id', '题号', '原始题号', 'full_score', 'id', 'meta', 'analysis', 'student_id', '姓名', '学号', 'name', 'average_score'];
+                    let groupKeys = Object.keys(firstRow).filter(k => !excludeKeys.includes(k));
                     
-                    // 解析能力要素字符串（处理中文逗号）
-                    let overrideAbilities: string[] | undefined = undefined;
-                    if (override?.ability_elements) {
-                        overrideAbilities = String(override.ability_elements)
-                            .replace(/，/g, ',') // 处理中文逗号
-                            .split(',')
-                            .map(s => s.trim())
-                            .filter(s => s);
+                    // Avoid duplication: if 'Grade'/'年级' exists, exclude 'score_rate'
+                    // 'score_rate' is often a duplicate of Grade created by backend for compatibility
+                    const hasGrade = groupKeys.some(k => k === 'Grade' || k === '年级' || k === 'Overall' || k === '全体');
+                    if (hasGrade) {
+                        groupKeys = groupKeys.filter(k => k !== 'score_rate' && k !== 'average_score');
+                    } else {
+                        // If NO Grade column, but 'score_rate' exists, we might want to rename it to '全年级' or keep it.
+                        // But wait, if we have [Class1, Class2, score_rate], score_rate is likely the average/total.
+                        // We should probably treat 'score_rate' as '全年级' if we are in multi-group mode.
                     }
-
-                    // 创建基础题目对象的副本
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const baseQ: any = { ...q };
                     
-                    // --- 强制系统ID ---
-                    // 确保ID与归一化后的分数据（Q1, Q2...）匹配
-                    // 这对于将分数数据与题目元数据对应至关重要
-                    const systemId = `Q${idx + 1}`;
-                    
-                    // 在元数据中保存原始ID
-                    if (!baseQ.meta) baseQ.meta = {};
-                    baseQ.meta.original_id = baseQ.id;
-
-                    // 覆盖用于分析上下文的ID
-                    baseQ.id = systemId;
-                    (baseQ as any)['题号'] = systemId;
-                    
-                    if (analysisResult) {
-                        Object.assign(baseQ, analysisResult);
-                    }
-
-                    // 应用修正数据 (同时注入到顶层和meta中，确保后端能正确读取)
-                    if (override) {
-                        if (override.framework_topic) {
-                            (baseQ as any).framework_topic = override.framework_topic;
-                            (baseQ as any).knowledge_topic = override.framework_topic; // 映射到常用的两个键名
-                            if (!(baseQ as any).meta) (baseQ as any).meta = {};
-                            (baseQ as any).meta.framework_topic = override.framework_topic;
-                            (baseQ as any).meta.knowledge_topic = override.framework_topic;
-                        }
-                        if (overrideAbilities) {
-                            (baseQ as any).ability_elements = overrideAbilities;
-                            if (!(baseQ as any).meta) (baseQ as any).meta = {};
-                            (baseQ as any).meta.ability_elements = overrideAbilities;
-                        }
-                        if (override.difficulty) {
-                             (baseQ as any).final_level = override.difficulty;
-                             if ((baseQ as any).comprehensive_rating) {
-                                 (baseQ as any).comprehensive_rating.final_level = override.difficulty;
-                             } else {
-                                 (baseQ as any).comprehensive_rating = { final_level: override.difficulty };
-                             }
+                    if (groupKeys.length > 0) {
+                        scoreData.forEach(row => {
+                            groupKeys.forEach(gKey => {
+                                if (row[gKey] !== undefined && row[gKey] !== null && row[gKey] !== '') {
+                                    meltedData.push({
+                                        question_id: row.question_id || row.id || row['题号'],
+                                        full_score: row.full_score,
+                                        group_name: gKey,
+                                        score_rate: row[gKey],
+                                        meta: row.meta
+                                    });
+                                }
+                            });
+                        });
+                        
+                        if (meltedData.length > 0) {
+                            console.log(`[Frontend] Melted ${scoreData.length} wide rows into ${meltedData.length} long rows.`);
+                            isMultiGroupMode = true;
+                            const uniqueGroups = Array.from(new Set(meltedData.map(d => d.group_name)));
+                            
+                            // Sort: Grade/年级 first, then natural sort
+                            sortedGroups = uniqueGroups.sort((a, b) => {
+                                const isGradeA = a === 'Grade' || a === '年级' || a === 'Overall' || a === '全体' || a === '总体' || a === 'score_rate';
+                                const isGradeB = b === 'Grade' || b === '年级' || b === 'Overall' || b === '全体' || b === '总体' || b === 'score_rate';
+                                if (isGradeA && !isGradeB) return -1;
+                                if (!isGradeA && isGradeB) return 1;
+                                return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+                            });
                         }
                     }
-
-                    return baseQ;
-                });
-
-                const response = await axios.post('http://127.0.0.1:8000/api/score/analyze', {
-                    score_data: scoreData,
-                    question_data: modelSpecificQuestions,
-                    mode: mode,
-                    config: {
-                        ...config,
-                        provider: config.provider,
-                        api_key: config.apiKey,
-                        base_url: config.baseUrl,
-                        model_name: config.modelName,
-                        temperature: config.temperature
-                    }
-                });
-
-                return response.data.tasks.map((t: any) => ({
-                    id: t.id,
-                    modelLabel: getModelDisplayLabel(config),
-                    configId: config.id,
-                    taskId: t.task_id,
-                    status: 'pending' as const
-                }));
-            });
-
-            // Update tasks as they are dispatched to support immediate pending state UI
-            // const allNewTasks: TaskInfo[] = [];
-            
-            // Wait for all dispatches but update state incrementally if possible (though Promise.all waits)
-            // To update immediately per model, we should not use Promise.all to wait for everything before setting state.
-            // But we need to collect all for polling.
-            // Improved approach: Add to state as soon as dispatched.
-            
-            analysisPromises.forEach(p => {
-                p.then(newTasks => {
-                    setTasks(prev => {
-                        // Merge new tasks to avoid duplicates if any retry logic exists (though simple append is fine here)
-                        const combined = [...prev, ...newTasks];
-                        // Remove duplicates by taskId just in case
-                        return combined.filter((v, i, a) => a.findIndex(t => t.taskId === v.taskId) === i);
+                } else if (firstRow.hasOwnProperty('score_rate') && firstRow.hasOwnProperty('group_name')) {
+                    // Already Melted (Long Format)
+                    isMultiGroupMode = true;
+                    const uniqueGroups = Array.from(new Set(scoreData.map(d => d.group_name)));
+                    sortedGroups = uniqueGroups.sort((a, b) => {
+                         const isGradeA = a === 'Grade' || a === '年级' || a === 'Overall' || a === '全体' || a === '总体' || a === 'score_rate';
+                         const isGradeB = b === 'Grade' || b === '年级' || b === 'Overall' || b === '全体' || b === '总体' || b === 'score_rate';
+                         if (isGradeA && !isGradeB) return -1;
+                         if (!isGradeA && isGradeB) return 1;
+                         return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
                     });
-                }).catch(e => console.error("Dispatch error for a model", e));
-            });
+                    meltedData = scoreData;
+                }
+            }
+
+            // 2. Pre-fill Tasks State (Immediate Feedback)
+            const initialTasks: TaskInfo[] = [];
             
-            // We still wait for all to ensure we catch any major setup errors, 
-            // but the UI will update via the individual promise resolutions above.
-            await Promise.all(analysisPromises);
+            if (isMultiGroupMode) {
+                // Multi-group: Create tasks for each group * model
+                sortedGroups.forEach(g => {
+                    modelConfigs.forEach(config => {
+                        initialTasks.push({
+                            id: g, // Group Name as ID
+                            modelLabel: getModelDisplayLabel(config),
+                            configId: config.id,
+                            taskId: `preparing_${g}_${config.id}`, // Temp ID
+                            status: 'pending'
+                        });
+                    });
+                });
+                setTasks(initialTasks);
+            }
+
+            // 3. Dispatch Requests
+            if (isMultiGroupMode) {
+                // Batch Dispatch per Group
+                for (const groupName of sortedGroups) {
+                    const groupData = meltedData.filter(d => d.group_name === groupName);
+                    
+                    // Dispatch all models for this group in parallel
+                    const groupPromises = modelConfigs.map(async (config) => {
+                         try {
+                             const modelSpecificQuestions = prepareQuestionsForConfig(config);
+                             
+                             const response = await axios.post('/api/score/analyze', {
+                                score_data: groupData, // Only this group's data
+                                question_data: modelSpecificQuestions,
+                                mode: mode,
+                                config: { 
+                                    ...config, 
+                                    provider: config.provider, 
+                                    api_key: config.apiKey, 
+                                    base_url: config.baseUrl, 
+                                    model_name: config.modelName, 
+                                    temperature: config.temperature 
+                                }
+                            });
+                            
+                            // Update Task ID with real ID from backend
+                            // response.data.tasks is array of created tasks
+                            const newTaskInfo = response.data.tasks[0]; 
+                            if (newTaskInfo) {
+                                setTasks(prev => prev.map(t => {
+                                    if (t.id === groupName && t.configId === config.id) {
+                                        return { ...t, taskId: newTaskInfo.task_id };
+                                    }
+                                    return t;
+                                }));
+                            }
+                         } catch (e) {
+                             console.error(`Failed to dispatch analysis for group ${groupName}, model ${config.label}`, e);
+                             setTasks(prev => prev.map(t => {
+                                 if (t.id === groupName && t.configId === config.id) {
+                                     return { ...t, status: 'failure', error: '启动失败' };
+                                 }
+                                 return t;
+                             }));
+                         }
+                    });
+                    
+                    // Wait for dispatch of this group to complete before moving to next (throttling)
+                    await Promise.all(groupPromises);
+                }
+            } else {
+                // Original Logic for Single/Student Mode
+                const analysisPromises = modelConfigs.map(async (config) => {
+                    const modelSpecificQuestions = prepareQuestionsForConfig(config);
+                    
+                    const response = await axios.post('/api/score/analyze', {
+                        score_data: scoreData,
+                        question_data: modelSpecificQuestions,
+                        mode: mode,
+                        config: {
+                            ...config,
+                            provider: config.provider,
+                            api_key: config.apiKey,
+                            base_url: config.baseUrl,
+                            model_name: config.modelName,
+                            temperature: config.temperature
+                        }
+                    });
+
+                    return response.data.tasks.map((t: any) => ({
+                        id: t.id,
+                        modelLabel: getModelDisplayLabel(config),
+                        configId: config.id,
+                        taskId: t.task_id,
+                        status: 'pending' as const
+                    }));
+                });
+
+                // Update state as they come in
+                analysisPromises.forEach(p => {
+                    p.then(newTasks => {
+                        setTasks(prev => {
+                            const combined = [...prev, ...newTasks];
+                            return combined.filter((v, i, a) => a.findIndex(t => t.taskId === v.taskId) === i);
+                        });
+                    });
+                });
+                
+                await Promise.all(analysisPromises);
+            }
             
             if (modelConfigs.length > 0) {
                 setActiveModelTab(modelConfigs[0].id);
@@ -1550,7 +2558,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                 .map(t => t.taskId);
                 
             // Always call stop to purge backend queue, even if no tasks are tracked as running
-            await axios.post('http://127.0.0.1:8000/api/tasks/stop', runningTaskIds);
+            await axios.post('/api/tasks/stop', runningTaskIds);
         } catch (error) {
             console.error("Failed to stop analysis", error);
             // alert("停止分析失败，请重试"); // Suppress alert for better UX on stop
@@ -1570,23 +2578,53 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
         const intervalId = setInterval(async () => {
             const updatedTasks = [...tasks];
             let changed = false;
-
             for (let i = 0; i < updatedTasks.length; i++) {
                 const task = updatedTasks[i];
                 if (task.status === 'success' || task.status === 'failure') continue;
                 
+                // Skip tasks that are still being prepared or retried
+                if (task.taskId && (task.taskId.startsWith('preparing_') || task.taskId.startsWith('retrying_'))) continue;
+
+
                 try {
-                    const res = await axios.get(`http://127.0.0.1:8000/api/tasks/${task.taskId}`);
+                    const res = await axios.get(`/api/tasks/${task.taskId}`);
                     const status = res.data.status; // PENDING, PROCESSING, SUCCESS, FAILURE
                     
                     if (status === 'SUCCESS') {
                         // Check if the result actually contains an application-level error
                         if (res.data.result && res.data.result.error) {
                             updatedTasks[i] = { ...task, status: 'failure', error: res.data.result.error };
+                            changed = true;
                         } else {
-                            updatedTasks[i] = { ...task, status: 'success', result: res.data.result };
+                            // Check for multi-group class analysis result to expand
+                            const result = res.data.result;
+                            const isMultiGroup = mode === 'class' && 
+                                                 result && typeof result === 'object' && 
+                                                 !result['总体分析'] && // Not a single analysis structure
+                                                 Object.values(result).some((v: any) => v && v['总体分析']); // Contains analysis objects
+
+                            if (isMultiGroup) {
+                                if (task.id === 'class_analysis') {
+                                    // Expand: Replace this single task with multiple tasks (one per group)
+                                    // We'll handle this by reconstructing the array after the loop
+                                    // Mark it for expansion
+                                    (updatedTasks as any)._expansions = (updatedTasks as any)._expansions || [];
+                                    (updatedTasks as any)._expansions.push({ index: i, result, originalTask: task });
+                                    changed = true;
+                                } else if (result[task.id]) {
+                                    // Update existing expanded task (e.g. after retry)
+                                    updatedTasks[i] = { ...task, status: 'success', result: result[task.id] };
+                                    changed = true;
+                                } else {
+                                    // Fallback
+                                    updatedTasks[i] = { ...task, status: 'success', result: result };
+                                    changed = true;
+                                }
+                            } else {
+                                updatedTasks[i] = { ...task, status: 'success', result: result };
+                                changed = true;
+                            }
                         }
-                        changed = true;
                     } else if (status === 'FAILURE') {
                         updatedTasks[i] = { ...task, status: 'failure', error: res.data.error || "任务执行失败" };
                         changed = true;
@@ -1605,7 +2643,38 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
             }
 
             if (changed) {
-                setTasks(updatedTasks);
+                // Apply expansions if any
+                if ((updatedTasks as any)._expansions) {
+                    const expansions = (updatedTasks as any)._expansions;
+                    let expandedTasks = [];
+                    
+                    for (let i = 0; i < updatedTasks.length; i++) {
+                        const expansion = expansions.find((e: any) => e.index === i);
+                        if (expansion) {
+                            const { result, originalTask } = expansion;
+                            // Sort keys: Grade first, then others naturally
+                            const keys = Object.keys(result).sort((a, b) => {
+                                if (a === 'Grade' || a === '年级') return -1;
+                                if (b === 'Grade' || b === '年级') return 1;
+                                return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+                            });
+                            
+                            keys.forEach(key => {
+                                expandedTasks.push({
+                                    ...originalTask,
+                                    id: key, // Set ID to group name
+                                    result: result[key],
+                                    status: 'success'
+                                });
+                            });
+                        } else {
+                            expandedTasks.push(updatedTasks[i]);
+                        }
+                    }
+                    setTasks(expandedTasks);
+                } else {
+                    setTasks(updatedTasks);
+                }
             }
             
             // Only stop analyzing if NO tasks are pending/processing AND we've completed a full pass
@@ -1614,7 +2683,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                 setAnalyzing(false);
             }
 
-        }, 3000); // Increase interval slightly to reduce load
+        }, 1000); // Reduce interval to 1s for faster feedback
 
         return () => clearInterval(intervalId);
     }, [tasks]);
@@ -1672,35 +2741,38 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
         if (mode === 'class') {
             const avgs: Record<string, number> = {};
             scoreData.forEach((row, idx) => {
-                // For class mode, we use normalized ID Q1, Q2...
                 const qId = `Q${idx + 1}`;
-                
-                // row.score_rate might be "0.85" or "85%" or 85
-                let rate = parseFloat(String(row.score_rate || row['得分率']).replace('%', ''));
-                if (isNaN(rate)) rate = 0;
-                
-                // Heuristic: if rate is <= 1.05, assume 0-1 scale. If > 1.05, assume 0-100 or raw score?
-                // But wait, the sample data says "0.85", "0.76".
-                // If the user inputs 85 for 85%, we need to handle it.
-                // Standard convention in this app seems to be 0-1 or 0-100.
-                if (rate <= 1.05 && rate >= 0) {
-                     // 0-1 scale, do nothing or multiply by 100 for display? 
-                     // Wait, for 'earned' calculation: rate * full_score.
-                     // So rate should be 0-1.
-                } else if (rate > 1.05) {
-                    // Assume 0-100 scale
-                    rate = rate / 100;
-                }
-                
                 const full = parseFloat(row.full_score || row['满分']) || (fullScores ? fullScores[qId] : 10) || 10;
-                avgs[qId] = rate * full;
+                
+                let val = parseFloat(String(row.score_rate || row['得分率']).replace('%', ''));
+                if (isNaN(val)) val = 0;
+                
+                // Robust score/rate detection
+                let finalScore = 0;
+                if (String(row.score_rate || row['得分率']).includes('%')) {
+                    finalScore = (val / 100) * full;
+                } else if (val <= 1.05) {
+                    finalScore = val * full;
+                } else {
+                    // val > 1.05. If <= full, assume Score. Else Percentage (0-100).
+                    if (val <= full) {
+                        finalScore = val;
+                    } else {
+                        finalScore = (val / 100) * full;
+                    }
+                }
+                avgs[qId] = finalScore;
             });
             return avgs;
         }
 
         if (mode !== 'student') return undefined;
         const keys = Object.keys(scoreData[0]);
-        const qKeys = keys.filter(k => k !== 'student_id' && k !== '姓名' && k !== '学号' && k !== 'name');
+        // Updated exclusion list to include class keys
+        const qKeys = keys.filter(k => 
+            k !== 'student_id' && k !== '姓名' && k !== '学号' && k !== 'name' &&
+            k !== 'class_id' && k !== 'class' && k !== '班级'
+        );
         
         const sums: Record<string, number> = {};
         const counts: Record<string, number> = {};
@@ -1729,6 +2801,114 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
     }, [scoreData, mode, fullScores]);
 
     // --- Helper Functions ---
+    // 提取指定分组（班级/年级）的平均分
+    const getGroupAverages = (groupName: string) => {
+        if (!scoreData || scoreData.length === 0) return undefined;
+        
+        const firstRow = scoreData[0];
+        
+        // CASE 1: Long Format (Melted) - Row = { question_id, group_name, score_rate }
+        if (firstRow.hasOwnProperty('group_name') && firstRow.hasOwnProperty('score_rate')) {
+            const avgs: Record<string, number> = {};
+            const groupRows = scoreData.filter(row => row.group_name === groupName);
+            
+            groupRows.forEach((row) => {
+                // Ensure consistent Q-ID
+                const qId = row.question_id || row['题号'] || row.id;
+                // If using System QID (Q1, Q2...), we might need to map it if the raw data doesn't use it.
+                // But scoreData should have been normalized to use system QIDs or at least consistent ones.
+                // However, let's assume 'question_id' is correct.
+                // But wait, the 'avgs' keys must match 'questions' keys used in Charts (usually Q1, Q2...).
+                // In handleStartAnalysis, we melted the data using:
+                // question_id: row.question_id || row.id || row['题号']
+                // So the keys should be preserved.
+                
+                // We need to map back to Q1, Q2... if possible, or just use the ID as is.
+                // AnalysisCharts iterates over `questions` (prop) which have system IDs (Q1, Q2...).
+                // So we need `avgs` to be keyed by System ID.
+                
+                // In Class Mode (normalized in handleUpload), scoreData usually has `question_id` = Q1, Q2...
+                // So we can trust it.
+                
+                const full = parseFloat(row.full_score || row['满分']) || (fullScores ? fullScores[qId] : 10) || 10;
+                let val = parseFloat(String(row.score_rate).replace('%', ''));
+                if (isNaN(val)) val = 0;
+                
+                let finalScore = 0;
+                // If val is small (<= 1.05), it's a rate.
+                // If it's percentage string, we stripped %.
+                // If it's > 1.05, it might be score or percentage (0-100).
+                
+                if (String(row.score_rate).includes('%')) {
+                    finalScore = (val / 100) * full;
+                } else if (val <= 1.05) {
+                    finalScore = val * full;
+                } else {
+                    if (val <= full) {
+                        finalScore = val;
+                    } else {
+                        finalScore = (val / 100) * full;
+                    }
+                }
+                avgs[qId] = finalScore;
+            });
+            return avgs;
+        }
+
+        // CASE 2: Wide Table - Row = { question_id, Class1: 0.8, Class2: 0.9 }
+        // Check if Wide Table: No group_name (which implies Long Format) but has the selected group key
+        // Note: We cannot rely on !score_rate because backend might add 'score_rate' column even in Wide Table (as normalized Grade)
+        const isWideTable = !firstRow.hasOwnProperty('group_name') && firstRow.hasOwnProperty(groupName);
+        
+        if (isWideTable) {
+            const avgs: Record<string, number> = {};
+            scoreData.forEach((row, idx) => {
+                const qId = `Q${idx + 1}`;
+                const full = parseFloat(row.full_score || row['满分']) || (fullScores ? fullScores[qId] : 10) || 10;
+                
+                const valRaw = row[groupName];
+                let val = parseFloat(String(valRaw).replace('%', ''));
+                if (isNaN(val)) val = 0;
+                
+                let finalScore = 0;
+                if (String(valRaw).includes('%')) {
+                    finalScore = (val / 100) * full;
+                } else if (val <= 1.05) {
+                    finalScore = val * full;
+                } else {
+                    if (val <= full) {
+                        finalScore = val;
+                    } else {
+                        finalScore = (val / 100) * full;
+                    }
+                }
+                avgs[qId] = finalScore;
+            });
+            return avgs;
+        }
+        return undefined;
+    };
+
+    // 1. 优化 selectedClassAverages 计算 (解决无限重绘问题)
+    const selectedClassAverages = useMemo(() => {
+        if (mode === 'class' && selectedResultId) {
+             const groupAvgs = getGroupAverages(selectedResultId);
+             if (groupAvgs) return groupAvgs;
+        }
+        return classAverages;
+    }, [mode, selectedResultId, scoreData, fullScores, classAverages]);
+
+    // 2. 计算全年级平均分 (用于对比)
+    const gradeAverages = useMemo(() => {
+        if (mode !== 'class' || scoreData.length === 0) return undefined;
+        const firstRow = scoreData[0];
+        const gradeKey = Object.keys(firstRow).find(k => k === 'Grade' || k === '年级' || k === 'Overall' || k === '全体' || k === '全年级');
+        if (gradeKey) {
+            return getGroupAverages(gradeKey);
+        }
+        return undefined;
+    }, [mode, scoreData, fullScores]);
+
     const generateWeaknessMarkdown = (items: any[], mode: 'class' | 'student', questions?: any[]) => {
         let md = `# ${mode === 'class' ? '薄弱点智能诊断与训练建议' : '错题深度诊断与个性化提升'}\n\n`;
         
@@ -1799,13 +2979,12 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
         if (!task.result) return;
         
         let content = "";
-        let extension = "md";
+        const extension = "md";
         
         if (task.result.markdown_report) {
             content = task.result.markdown_report;
         } else {
-            content = JSON.stringify(task.result, null, 2);
-            extension = "json";
+            content = generateMarkdownFromJSON(task.result);
         }
         
         const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
@@ -1860,6 +3039,111 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
             console.error("PDF generation failed", error);
             alert("PDF生成失败，请重试");
         }
+    };
+
+    const handleDownloadFullPDF = async (title: string, onExpand?: () => Promise<void>) => {
+        setExporting(true);
+        setExportProgressText('0/3'); // Initial state
+        
+        // Wait for UI update
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        if (onExpand) await onExpand();
+
+        const pdf = new jsPDF({
+            orientation: 'portrait',
+            unit: 'mm',
+            format: 'a4',
+        });
+
+        const imgWidth = 210;
+        const pageHeight = 297;
+        let position = 0;
+
+        // 1. Charts
+        const chartsEl = document.getElementById('analysis-charts-container');
+        if (chartsEl) {
+            try {
+                const canvas = await html2canvas(chartsEl, { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' });
+                const imgData = canvas.toDataURL('image/png');
+                const imgHeight = (canvas.height * imgWidth) / canvas.width;
+                pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+                // Add page if content overflows
+                if (imgHeight > pageHeight) {
+                    let heightLeft = imgHeight - pageHeight;
+                    let p = -pageHeight;
+                    while(heightLeft > 0) {
+                         pdf.addPage();
+                         pdf.addImage(imgData, 'PNG', 0, p, imgWidth, imgHeight);
+                         heightLeft -= pageHeight;
+                         p -= pageHeight;
+                    }
+                    position = 0; // Reset for next section on new page (if exact fit) or just continue?
+                    // Actually, simple sequential addPage is safer.
+                    pdf.addPage();
+                } else {
+                    pdf.addPage();
+                }
+            } catch (e) { console.error("Chart capture failed", e); }
+        }
+        setExportProgressText('1/3');
+        await new Promise(resolve => setTimeout(resolve, 100)); // UI update
+
+        // 2. Weakness Cards
+        const weaknessEl = document.getElementById('weakness-cards-container');
+        if (weaknessEl) {
+             try {
+                const canvas = await html2canvas(weaknessEl, { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' });
+                const imgData = canvas.toDataURL('image/png');
+                const imgHeight = (canvas.height * imgWidth) / canvas.width;
+                
+                // New page already added above
+                pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+                
+                if (imgHeight > pageHeight) {
+                    let heightLeft = imgHeight - pageHeight;
+                    let p = -pageHeight;
+                    while(heightLeft > 0) {
+                         pdf.addPage();
+                         pdf.addImage(imgData, 'PNG', 0, p, imgWidth, imgHeight);
+                         heightLeft -= pageHeight;
+                         p -= pageHeight;
+                    }
+                }
+                pdf.addPage();
+            } catch (e) { console.error("Weakness capture failed", e); }
+        }
+        setExportProgressText('2/3');
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // 3. Smart Report
+        const reportEl = document.getElementById('smart-analysis-report-container');
+        if (reportEl) {
+             try {
+                const canvas = await html2canvas(reportEl, { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' });
+                const imgData = canvas.toDataURL('image/png');
+                const imgHeight = (canvas.height * imgWidth) / canvas.width;
+                
+                pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+                
+                if (imgHeight > pageHeight) {
+                    let heightLeft = imgHeight - pageHeight;
+                    let p = -pageHeight;
+                    while(heightLeft > 0) {
+                         pdf.addPage();
+                         pdf.addImage(imgData, 'PNG', 0, p, imgWidth, imgHeight);
+                         heightLeft -= pageHeight;
+                         p -= pageHeight;
+                    }
+                }
+            } catch (e) { console.error("Report capture failed", e); }
+        }
+        setExportProgressText('3/3');
+        await new Promise(resolve => setTimeout(resolve, 800)); // Show 3/3 for a moment
+
+        pdf.save(`${title}.pdf`);
+        setExporting(false);
+        setExportProgressText('');
     };
 
     const handleDownloadRemedialMD = () => {
@@ -1975,7 +3259,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
             // Loop for countPerItem
             for (let i = 0; i < countPerItem; i++) {
                 try {
-                    const response = await axios.post('http://127.0.0.1:8000/api/score/variant/generate', {
+                    const response = await axios.post('/api/score/variant/generate', {
                         question_content: question.content,
                         topic: topic,
                         abilities: abilities,
@@ -2110,7 +3394,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
         setVariantError(null);
 
         try {
-            const response = await axios.post('http://127.0.0.1:8000/api/score/variant/generate', {
+            const response = await axios.post('/api/score/variant/generate', {
                 question_content: question.content,
                 topic: topic,
                 abilities: abilities,
@@ -2185,33 +3469,53 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                                 onClick={handleUpload}
                                 disabled={!file || uploading}
                             >
-                                {uploading ? '上传中...' : '确认上传'}
+                                {uploading ? `上传中 ${uploadProgress}%` : '确认上传'}
                             </Button>
                         </Grid>
                     </Grid>
 
                     {previewData.length > 0 && (
                         <Box sx={{ mt: 3 }}>
-                            <Typography variant="subtitle1" gutterBottom>数据预览 (可编辑)</Typography>
+                            <Typography variant="subtitle1" gutterBottom>
+                                数据预览 (共 {previewData.length} 条)
+                                {mode === 'student' && (
+                                    <Button 
+                                        size="small" 
+                                        onClick={() => setCollapsedColumns(!collapsedColumns)}
+                                        sx={{ ml: 2 }}
+                                    >
+                                        {collapsedColumns ? "展开全部题目" : "折叠题目 (Q1-Q10)"}
+                                    </Button>
+                                )}
+                            </Typography>
                             <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 400, overflow: 'auto' }}>
                                 <Table size="small" stickyHeader>
                                     <TableHead>
                                         <TableRow sx={{ bgcolor: '#f5f5f5' }}>
-                                            {Object.keys(previewData[0]).map(key => (
-                                                <TableCell key={key} sx={{ fontWeight: 'bold' }}>{key}</TableCell>
-                                            ))}
+                                            {/* Render columns based on displayHeaders */}
+                                            {displayHeaders.map(colName => {
+                                                const systemKey = headerMap[colName] || colName;
+                                                // If systemKey starts with Q and is different from colName, show mapping
+                                                const showMapping = systemKey.startsWith('Q') && systemKey !== colName;
+                                                return (
+                                                    <TableCell key={colName} sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+                                                        {colName} {showMapping ? <Typography variant="caption" color="text.secondary" display="block">({systemKey})</Typography> : ''}
+                                                    </TableCell>
+                                                );
+                                            })}
                                         </TableRow>
                                         {/* Full Score Editing Row */}
                                         {mode === 'student' && previewData[0] && (
                                             <TableRow sx={{ bgcolor: '#e3f2fd' }}>
-                                                {Object.keys(previewData[0] as object).map(key => {
+                                                {displayHeaders.map(colName => {
+                                                     const key = headerMap[colName] || colName;
                                                      const isQuestion = typeof key === 'string' && key.startsWith('Q') && !isNaN(parseInt(key.slice(1)));
                                                      // Show existing full score or try to infer from header
-                                                     const inferred = (typeof key === 'string' ? key.match(/[\(（](\d+)分?[\)）]/)?.[1] : undefined);
+                                                     const inferred = (typeof colName === 'string' ? colName.match(/[\(（](\d+)分?[\)）]/)?.[1] : undefined);
                                                      const displayValue = fullScores[key] !== undefined ? fullScores[key] : (inferred || '');
                                                      
                                                      return (
-                                                         <TableCell key={key} sx={{ fontWeight: 'bold', color: 'primary.main', p: 1 }}>
+                                                         <TableCell key={colName} sx={{ fontWeight: 'bold', color: 'primary.main', p: 1 }}>
                                                              {isQuestion ? (
                                                                  <TextField
                                                                       variant="standard"
@@ -2245,35 +3549,52 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                                         )}
                                     </TableHead>
                                     <TableBody>
-                                        {previewData.map((row, idx) => (
-                                            <TableRow key={idx}>
-                                                {Object.entries(row).map(([key, val], vIdx) => (
-                                                    <TableCell key={vIdx}>
+                                        {previewData
+                                            .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+                                            .map((row, idx) => {
+                                            // Real index in the full array
+                                            const realIdx = page * rowsPerPage + idx;
+                                            return (
+                                                <TableRow key={realIdx}>
+                                                    {displayHeaders.map((colName, vIdx) => {
+                                                        const key = headerMap[colName] || colName;
+                                                        const val = row[key];
+                                                        
+                                                        return (
+                                                        <TableCell key={vIdx} sx={{ whiteSpace: 'nowrap' }}>
                                                         {/* Allow editing if it's a number-like field and not ID/Name */}
                                                         {(key !== 'student_id' && key !== 'question_id' && key !== '姓名' && key !== '学号' && key !== '题号') ? (
-                                                            <TextField
-                                                                variant="standard"
-                                                                size="small"
+                                                            <MemoizedEditableCell
                                                                 value={val as string}
-                                                                onChange={(e) => {
+                                                                onCommit={(newValue) => {
                                                                     const newData = [...previewData];
-                                                                    newData[idx] = { ...newData[idx], [key]: e.target.value };
+                                                                    newData[realIdx] = { ...newData[realIdx], [key]: newValue };
                                                                     setPreviewData(newData);
-                                                                    setScoreData(newData); // Sync scoreData
+                                                                    setScoreData(newData);
                                                                 }}
-                                                                InputProps={{ disableUnderline: true, style: { fontSize: '0.875rem' } }}
-                                                                sx={{ width: '100%' }}
                                                             />
                                                         ) : (
                                                             val as React.ReactNode
                                                         )}
                                                     </TableCell>
-                                                ))}
-                                            </TableRow>
-                                        ))}
+                                                    )})}
+                                                </TableRow>
+                                            );
+                                        })}
                                     </TableBody>
                                 </Table>
                             </TableContainer>
+                            <TablePagination
+                                component="div"
+                                count={previewData.length}
+                                page={page}
+                                onPageChange={handleChangePage}
+                                rowsPerPage={rowsPerPage}
+                                onRowsPerPageChange={handleChangeRowsPerPage}
+                                rowsPerPageOptions={mode === 'student' ? [5] : [10, 25, 50, 100]}
+                                labelRowsPerPage="每页行数:"
+                                labelDisplayedRows={({ from, to, count }) => `${from}-${to} / 共 ${count}`}
+                            />
                             <Alert severity="success" sx={{ mt: 2 }}>
                                 数据校验通过！共加载 {scoreData.length} 条数据。
                             </Alert>
@@ -2459,6 +3780,24 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
 
                 <Stack direction="row" spacing={2}>
                     <Button 
+                        startIcon={<TimelineIcon />} 
+                        onClick={() => setHistoryOpen(true)}
+                        variant="outlined"
+                        color="inherit"
+                    >
+                        历史记录
+                    </Button>
+                    <Button 
+                        startIcon={<SaveIcon />} 
+                        onClick={handleSaveSession}
+                        disabled={analyzing || tasks.length === 0 || !!historyQuestions}
+                        variant="outlined"
+                        color="primary"
+                    >
+                        保存结果
+                    </Button>
+
+                    <Button 
                         variant="contained" 
                         color="primary" 
                         size="large"
@@ -2533,6 +3872,22 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                                         const allSuccess = subjectTasks.every(t => t.status === 'success');
                                         const anyProcessing = subjectTasks.some(t => t.status === 'processing' || t.status === 'pending');
                                         const anyFailure = subjectTasks.some(t => t.status === 'failure');
+                                        
+                                        // Retrieve student info for display
+                                        let displayLabel = subjectId;
+                                        if (mode === 'student') {
+                                            const studentInfo = scoreData.find(s => 
+                                                s.student_id === subjectId || s['姓名'] === subjectId || s['学号'] === subjectId
+                                            );
+                                            const classInfo = studentInfo ? (studentInfo.class_id || studentInfo['班级'] || studentInfo['class']) : '';
+                                            if (classInfo) {
+                                                displayLabel = `${classInfo} - ${subjectId}`;
+                                            } else {
+                                                displayLabel = `学生: ${subjectId}`;
+                                            }
+                                        } else if (mode === 'class') {
+                                            displayLabel = (subjectId === 'class_analysis' ? '全班总体分析' : (subjectId === 'Grade' ? '全年级' : subjectId));
+                                        }
 
                                         return (
                                         <Box 
@@ -2550,7 +3905,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                                             <Grid container justifyContent="space-between" alignItems="center">
                                                 <Grid item>
                                                     <Typography variant="body2" fontWeight="bold">
-                                                        {subjectId === 'class_analysis' ? '全班总体分析' : `学生: ${subjectId}`}
+                                                        {displayLabel}
                                                     </Typography>
                                                 </Grid>
                                                 <Grid item>
@@ -2586,6 +3941,9 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                                     (s['姓名'] === selectedResultId) ||
                                     (s['学号'] === selectedResultId)
                                 ) : undefined;
+
+                                // Use memoized averages
+                                const currentClassAverages = selectedClassAverages;
 
                                 return (
                                     <Box>
@@ -2624,9 +3982,11 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                                                     result={activeTask.result} 
                                                     mode={mode} 
                                                     studentRow={studentRow}
-                                                    classAverages={classAverages}
+                                                    classAverages={currentClassAverages}
+                                                    gradeAverages={gradeAverages}
                                                     fullScores={fullScores}
                                                     questions={questions}
+                                                    onDownloadPDF={() => handleDownloadPDF('analysis-charts-container', `能力分析图表_${activeTask.modelLabel}_${mode === 'class' ? '集体' : (studentRow ? `${studentRow.class_id || ''}_${studentRow['姓名'] || activeTask.id}` : activeTask.id)}`)}
                                                 />
 
                                                 <WeaknessCards 
@@ -2634,15 +3994,31 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                                                     mode={mode} 
                                                     onDownloadMD={() => handleDownloadWeaknessMD(activeTask)}
                                                     onDownloadPDF={() => handleDownloadPDF('weakness-cards-container', `深度诊断_${activeTask.modelLabel}_${mode === 'class' ? '集体' : (activeTask.id || '个人')}`)}
+                                                    onDownloadFull={() => handleDownloadFullPDF(`完整学情报告_${activeTask.modelLabel}_${mode === 'class' ? '集体' : (studentRow ? `${studentRow.class_id || ''}_${studentRow['姓名'] || activeTask.id}` : activeTask.id)}`)}
                                                     onGenerateVariant={handleGenerateVariant}
                                                     onGenerateRemedial={handleGenerateRemedialPaper}
                                                     questions={questions}
+                                                    studentRow={studentRow}
+                                                    isExporting={exporting}
+                                                    exportProgress={exportProgressText}
                                                 />
 
                                                 <Divider sx={{ my: 3 }} />
 
                                                     <Card variant="outlined" sx={{ border: 'none', boxShadow: 'none' }} id="smart-analysis-report-container">
                                                         <CardContent sx={{ p: 0 }}>
+                                                            {/* Report Header Info */}
+                                                            {mode === 'student' && studentRow && (
+                                                                <Box sx={{ mb: 2, p: 2, bgcolor: '#e3f2fd', borderRadius: 2, display: 'flex', gap: 4, alignItems: 'center' }}>
+                                                                    <Typography variant="subtitle1">
+                                                                        <Box component="span" sx={{ fontWeight: 'bold', color: 'text.secondary' }}>班级:</Box> {studentRow.class_id || studentRow['班级'] || studentRow['class'] || '未分班'}
+                                                                    </Typography>
+                                                                    <Typography variant="subtitle1">
+                                                                        <Box component="span" sx={{ fontWeight: 'bold', color: 'text.secondary' }}>姓名:</Box> {studentRow.student_id || studentRow['姓名'] || studentRow['name']}
+                                                                    </Typography>
+                                                                </Box>
+                                                            )}
+
                                                             <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 2, bgcolor: '#f8f9fa', borderRadius: 2, borderLeft: '5px solid #1976d2' }}>
                                                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                                                                     <AssignmentIcon color="primary" />
@@ -2671,16 +4047,10 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                                                             </Box>
                                                             
                                                             <Box sx={{ p: 1 }}>
-                                                                {activeTask.result.markdown_report ? (
-                                                                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                                                                        {activeTask.result.markdown_report}
-                                                                    </ReactMarkdown>
-                                                                ) : (
-                                                                <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.875rem', fontFamily: 'inherit' }}>
-                                                                    {JSON.stringify(activeTask.result, null, 2)}
-                                                                </pre>
-                                                            )}
-                                                        </Box>
+                                                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                                                                    {activeTask.result.markdown_report || generateMarkdownFromJSON(activeTask.result)}
+                                                                </ReactMarkdown>
+                                                            </Box>
                                                     </CardContent>
                                                 </Card>
                                             </Box>
@@ -2964,6 +4334,13 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions,
                     <Button onClick={() => setRemedialOpen(false)} disabled={remedialGenerating}>关闭</Button>
                 </CardActions>
             </Dialog>
+
+            <HistorySelector 
+                open={historyOpen}
+                onClose={() => setHistoryOpen(false)}
+                onLoad={handleLoadHistory}
+                filterType="score_analysis"
+            />
 
             {/* Hidden Print Areas for PDF Generation */}
             <div style={{ position: 'absolute', left: '-10000px', top: 0 }}>

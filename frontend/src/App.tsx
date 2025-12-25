@@ -805,8 +805,6 @@ function App() {
       }
   };
 
-
-
     // --- 辅助功能：轮询任务结果 ---
     const pollTasks = async (pendingTasks: { qId: string, model: string, taskId: string }[]) => {
       if (pendingTasks.length === 0) {
@@ -1288,7 +1286,7 @@ function App() {
       <Container maxWidth="xl">
         <Box sx={{ my: 4 }}>
           <Typography variant="h4" component="h1" gutterBottom align="center" sx={{ fontWeight: 'bold', color: 'primary.main', mb: 1 }}>
-            高中化学试题深度标定与学情诊断系统
+            高中化学试题深度标定与学情诊断系统（一键桌面版）
           </Typography>
           <Typography variant="subtitle1" align="center" color="text.secondary" sx={{ mb: 4 }}>
             基于 DeepSeek / 豆包 / 通义千问 / Kimi / 智谱等多模型协同分析

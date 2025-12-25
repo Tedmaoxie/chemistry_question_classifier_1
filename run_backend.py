@@ -1,100 +1,70 @@
-import sys
 import os
-import multiprocessing
+import sys
 import traceback
+import multiprocessing
 
-# 1. Freeze support for multiprocessing (critical for Windows)
-# Must be outside the main block or at the very top if using spawn
-if __name__ == "__main__":
-    multiprocessing.freeze_support()
-
-def run():
+# Immediate logging function
+def log_early(msg):
     try:
-        print("Initializing Chemistry Question Classifier Backend...")
+        # Also write to a file in the same directory as the exe
+        log_path = "startup_debug.log"
+        if getattr(sys, 'frozen', False):
+            log_path = os.path.join(os.path.dirname(sys.executable), "startup_debug.log")
         
-        # 2. Setup Environment
-        os.environ["RUNNING_DESKTOP"] = "true"
-        
-        # Ensure backend module can be found
-        base_dir = os.path.abspath(".")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{os.getpid()}] {msg}\n")
+        print(msg)
+        sys.stdout.flush()
+    except:
+        pass
+
+log_early("--- 脚本加载 / Script Loading ---")
+
+if __name__ == "__main__":
+    # Support for multiprocessing in frozen apps
+    multiprocessing.freeze_support()
+    
+    log_early("--- 程序启动 / Program Starting ---")
+    
+    try:
+        # Determine the base directory
         if getattr(sys, 'frozen', False):
             base_dir = os.path.dirname(sys.executable)
-        
-        # Load .env manually if exists (for desktop user convenience)
-        env_path = os.path.join(base_dir, ".env")
-        if os.path.exists(env_path):
-            print(f"Loading environment from {env_path}")
-            try:
-                with open(env_path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith("#"): continue
-                        if "=" in line:
-                            k, v = line.split("=", 1)
-                            # Do not overwrite system env vars if already set
-                            if k.strip() not in os.environ:
-                                os.environ[k.strip()] = v.strip('"\'')
-            except Exception as e:
-                print(f"Warning: Failed to load .env file: {e}")
-
-        # We already added to sys.path above, but let's double check for runtime safety
-        if base_dir not in sys.path:
-            sys.path.insert(0, base_dir)
+            internal_dir = os.path.join(base_dir, "_internal")
+            if os.path.exists(internal_dir):
+                sys.path.append(internal_dir)
+            sys.path.append(base_dir)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            sys.path.append(base_dir)
             
-        print(f"Working directory: {base_dir}")
-        print("Loading dependencies...")
+        log_early(f"Base Directory: {base_dir}")
+        log_early(f"Python Path: {sys.path}")
 
-        # 3. Delayed Imports to prevent crash on startup if missing
-        # Explicit imports to ensure PyInstaller finds them
-        global uvicorn, pd, np, fastapi, starlette, pydantic
-        global docx, pdfplumber, openpyxl, multipart, celery, redis
-        global app
-
+        log_early("正在加载依赖 / Loading dependencies...")
+        from dotenv import load_dotenv
         import uvicorn
-        import pandas as pd
-        import numpy as np
-        import fastapi
-        import starlette
-        import pydantic
-        import docx
-        import pdfplumber
-        import openpyxl
-        import multipart
-        import celery
-        import redis
-        
-        # Add current directory to sys.path to ensure 'backend' module can be found
-        sys.path.insert(0, os.path.abspath("."))
-        
+        load_dotenv()
+        # Set desktop mode flag
+        os.environ["RUNNING_DESKTOP"] = "true"
+        log_early("依赖加载完成 / Dependencies loaded.")
+
+        log_early("正在初始化应用 / Initializing app...")
+        # We import inside try to catch initialization errors
         from backend.main import app
+        log_early("应用初始化完成 / App initialized.")
 
-        print("Dependencies loaded successfully.")
-             
-        # 4. Run Server
-        print("Starting server on http://127.0.0.1:8000...")
-        
-        # Open browser automatically
-        import webbrowser
-        import threading
-        
-        def open_browser():
-            import time
-            time.sleep(1.5) # Wait for server to start
-            webbrowser.open("http://127.0.0.1:8000/")
-            
-        threading.Thread(target=open_browser, daemon=True).start()
-
-        # reload=False is important for frozen app
-        uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info", reload=False)
+        log_early(f"正在启动服务 (127.0.0.1:8000) / Starting server...")
+        uvicorn.run(app, host="127.0.0.1", port=8000, reload=False, workers=1)
         
     except Exception as e:
+        log_early("!!! 启动发生错误 / Startup Error !!!")
+        error_msg = traceback.format_exc()
+        log_early(error_msg)
+        
         print("\n" + "="*50)
-        print("CRITICAL ERROR: Failed to start application")
+        print("程序启动失败 / Program Startup Failed")
         print("="*50)
-        traceback.print_exc()
+        print(error_msg)
         print("="*50)
-        print(f"Error details: {e}")
-        input("Press Enter to exit...")
-
-if __name__ == "__main__":
-    run()
+        input("\n按回车键退出... / Press Enter to exit...")

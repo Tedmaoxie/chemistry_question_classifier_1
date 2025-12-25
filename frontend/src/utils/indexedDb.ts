@@ -55,15 +55,19 @@ export async function saveSessionToIndexedDB(session: RatingSession, retention =
             req.onerror = () => reject(req.error);
         });
 
-        // Cleanup old sessions (keep latest 'retention' count)
+        // Cleanup old sessions (keep latest 'retention' count per type)
         const all: RatingSession[] = await new Promise((resolve, reject) => {
             const req = store.getAll();
             req.onsuccess = () => resolve(req.result as RatingSession[]);
             req.onerror = () => reject(req.error);
         });
 
-        if (all.length > retention) {
-            const sorted = all.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+        // Filter by current session type
+        const typeToCheck = session.type;
+        const sameTypeSessions = all.filter(s => s.type === typeToCheck);
+
+        if (sameTypeSessions.length > retention) {
+            const sorted = sameTypeSessions.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
             const toDelete = sorted.slice(retention);
             
             await Promise.all(toDelete.map(item => new Promise<void>((resolve, reject) => {
@@ -88,7 +92,8 @@ export async function getSessionList(): Promise<RatingSessionSummary[]> {
                 id: item.id,
                 examName: item.examName,
                 createdAt: item.createdAt,
-                questionCount: item.questions?.length || 0
+                questionCount: item.questions?.length || 0,
+                type: item.type
             }))
             .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
     });
