@@ -8,96 +8,85 @@ pinned: false
 app_port: 7860
 ---
 
-# 化学题目智能分析系统 (Chemistry Question Classifier)
+# 高中化学试题深度标定与学情诊断系统
+**AI 赋能高中化学教学系列 · 实验中学智能实验室**
 
-**AI赋能高中化学教学系列 by 实验中学**
+[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces/Tedmaoxie/chemistry_question_classifier_1)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 📖 项目简介
-本项目是一个基于大语言模型（LLM）的智能化学题目分析系统。旨在帮助教师快速分析试卷题目，自动进行难度评级、知识点提取、核心素养标注，并生成详细的分析报告。支持多种主流大模型（DeepSeek, 豆包, Qwen, Kimi, Zhipu 等）。
 
-## ✨ 核心功能
-- **智能分析**：自动识别题目内容，分析考察知识点和解题思路。
-- **难度评级**：基于 AI 对题目进行难度打分（L1-L5）和区分度评估。
-- **多模型并发**：支持同时使用多个大模型进行分析，对比结果。
-- **一键报告**：生成 Markdown 或 PDF 格式的详细分析报告。
-- **批量处理**：支持上传 PDF/图片/Word 文档进行批量题目分析。
+本项目是一款专为高中化学教师设计的智能辅助系统。通过集成多种前沿大语言模型（LLM），系统能够对化学试题进行深度标定，并结合学生得分情况进行多维度的学情诊断。
 
-## 🚀 部署指南 (Hugging Face Spaces)
-本项目已针对 Hugging Face Spaces 进行了优化，支持一键部署。
+系统支持**网页云端版**与**桌面一键版**两种形态，既能部署在 Hugging Face 等服务器上供全校师生使用，也能在本地 Windows 环境下一键启动，无需复杂配置。
 
-### 部署步骤
-1. **注册账号**：访问 [Hugging Face](https://huggingface.co/) 注册并登录。
-2. **创建 Space**：
-   - 点击右上角 **New Space**。
-   - 输入 Space Name (例如 `chemistry-classifier`)。
-   - License 选择 `MIT`。
-   - **SDK 选择 Docker** (重要！)。
-   - Template 选择 **Blank**。
-   - 点击 **Create Space**。
-3. **上传代码**：
-   - 进入创建好的 Space 页面，点击 **Files** 标签页。
-   - 点击 **Add file** -> **Upload files**。
-   - 将本项目文件夹下的**所有文件**拖入上传区域。
-   - 点击 **Commit changes to main**。
-4. **等待启动**：
-   - 系统会自动构建环境（Build），约需 3-5 分钟。
-   - 当状态变为 **Running** 时，即可通过页面上方的链接访问系统。
+---
 
-### 🔑 关于 API Key
-- 本系统**不需要**在部署时配置环境变量。
-- 用户在使用网页端时，直接在界面右侧配置面板输入自己的 API Key 即可使用。
-- Key 仅用于当次请求，后端不会持久化存储，确保安全。
+## ✨ 核心亮点
 
-## 💻 本地开发指南
+### 1. 深度试题标定
+- **难度精准评估**：自动对题目进行 L1-L5 五级难度打分，并提供详细的评分理由。
+- **知识点提取**：精准识别题目考察的化学知识模块及细分知识点。
+- **核心素养标注**：结合高中化学新课标，自动标注题目所属的核心素养维度（如：宏观辨识与微观探析、变化观念与平衡思想等）。
 
-如果您希望在本地运行或二次开发：
+### 2. 多维度学情诊断
+- **班级/小组分析**：上传成绩表后，系统可自动按班级或自定义小组进行群体表现分析。
+- **个人诊断报告**：为每位学生生成专属的优劣势分析报告。
+- **流式实时反馈**：诊断结果逐条输出，无需长时间等待，交互体验流畅。
 
-### 前置要求
-- Python 3.11+
-- Node.js 18+
-- Redis Server
+### 3. 全面模型支持
+- 集成 **DeepSeek (V3/R1)**、**字节跳动·豆包**、**阿里·通义千问**、**月之暗面·Kimi**、**智谱·GLM** 等主流模型。
+- 支持多模型并行分析，方便教师对比不同 AI 的评估视角。
 
-### 1. 启动 Redis
-确保本地安装并启动了 Redis 服务。
+### 4. 极致隐私与安全
+- **无痕设计**：API Key 仅用于当前会话，后端不进行任何持久化存储。
+- **数据安全**：所有成绩分析数据均在内存中处理，随用随走。
 
-### 2. 后端启动
-```bash
-# 进入后端目录
-cd backend
+---
 
-# 创建并激活虚拟环境 (可选)
-python -m venv venv
-# Windows: venv\Scripts\activate
-# Linux/Mac: source venv/bin/activate
+## 🚀 部署指南
 
-# 安装依赖
-pip install -r requirements.txt
+### A. Hugging Face Spaces (云端版)
+本项目已完美适配 Hugging Face Docker 环境：
+1. **创建 Space**：在 Hugging Face 新建 Space，SDK 选择 **Docker**。
+2. **同步代码**：将本项目所有文件推送到 Space 的 `main` 分支。
+3. **自动构建**：系统将自动识别 `Dockerfile` 并开始构建，约需 3-5 分钟。
+4. **访问使用**：构建完成后，直接通过 Space 提供的 URL 即可访问。
 
-# 启动 Celery Worker (任务队列)
-celery -A celery_app worker --loglevel=info --pool=solo
+### B. Windows 桌面版 (一键运行)
+针对无服务器环境设计的“零门槛”方案：
+1. **一键打包**：运行根目录下的 `full_rebuild.bat` 脚本。
+2. **自动生成**：脚本将自动编译前端、配置后端环境，并在 `dist` 目录下生成 `chemistry_backend.exe`。
+3. **即点即用**：双击运行生成的 `.exe` 文件，系统将自动弹出浏览器并进入操作界面。
 
-# 启动 FastAPI 服务 (另开终端)
-uvicorn main:app --reload
-```
+### C. 本地开发模式
+1. **环境要求**：Python 3.11+, Node.js 18+, Redis。
+2. **后端启动**：
+   ```bash
+   cd backend
+   pip install -r requirements.txt
+   uvicorn main:app --reload
+   ```
+3. **前端启动**：
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
 
-### 3. 前端启动
-```bash
-# 进入前端目录
-cd frontend
+---
 
-# 安装依赖
-npm install
+## 🛠️ 技术架构
+- **前端**：React 18 + TypeScript + Vite + Material UI (MUI)
+- **后端**：FastAPI (Python) + Celery (异步处理)
+- **存储**：Redis (任务队列) + IndexedDB (前端本地历史)
+- **打包**：PyInstaller (后端打包) + Vite (前端构建)
 
-# 启动开发服务器
-npm run dev
-```
-访问 `http://localhost:5173` 即可看到界面。
-
-## 🛠️ 技术栈
-- **前端**: React, TypeScript, Vite, Material UI
-- **后端**: FastAPI, Python
-- **任务队列**: Celery, Redis
-- **AI 集成**: OpenAI SDK (兼容 DeepSeek, Doubao, Qwen 等)
+---
 
 ## 📄 许可证
-MIT License
+本项目遵循 **MIT License**。
+
+---
+**实验中学 · 智能教育探索团队** 
+*让 AI 成为教师最得力的助手*
