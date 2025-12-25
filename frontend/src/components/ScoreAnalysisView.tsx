@@ -1911,7 +1911,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
         formData.append('mode', mode);
 
         try {
-            const response = await axios.post('http://127.0.0.1:8000/api/score/upload', formData, {
+            const response = await axios.post('/api/score/upload', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
                 onUploadProgress: (progressEvent) => {
                     if (progressEvent.total) {
@@ -2139,6 +2139,9 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
 
     // --- Retry Handler ---
     const handleRetryTask = async (failedTask: TaskInfo) => {
+        // 先停止之前的轮询
+        setAnalyzing(false);
+        
         const config = modelConfigs.find(c => c.id === failedTask.configId);
         if (!config) {
             alert("找不到对应的模型配置，无法重试。");
@@ -2218,17 +2221,22 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
             return baseQ;
         });
 
-        // 更新状态为 pending
+        // 更新状态为 pending，并设置临时 ID 防止轮询冲突
         setTasks(prev => prev.map(t => {
             if (t.taskId === failedTask.taskId) {
-                return { ...t, status: 'pending', error: undefined };
+                return { 
+                    ...t, 
+                    status: 'pending', 
+                    error: undefined,
+                    taskId: `retrying_${failedTask.taskId}` // 使用前缀让轮询跳过
+                };
             }
             return t;
         }));
         setAnalyzing(true);
 
         try {
-            const response = await axios.post('http://127.0.0.1:8000/api/score/analyze', {
+            const response = await axios.post('/api/score/analyze', {
                 score_data: targetScoreData,
                 question_data: modelSpecificQuestions,
                 mode: mode,
@@ -2246,7 +2254,8 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
             if (newTasksRaw.length > 0) {
                 const newTaskRaw = newTasksRaw[0];
                 setTasks(prev => prev.map(t => {
-                    if (t.taskId === failedTask.taskId) {
+                    // Match either the original ID or the temporary retrying ID
+                    if (t.taskId === failedTask.taskId || t.taskId === `retrying_${failedTask.taskId}`) {
                          return {
                             ...t,
                             taskId: newTaskRaw.task_id,
@@ -2260,7 +2269,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
             console.error("Retry failed", error);
             const msg = error.response?.data?.detail || error.message || "Retry failed";
             setTasks(prev => prev.map(t => {
-                if (t.taskId === failedTask.taskId) {
+                if (t.taskId === failedTask.taskId || t.taskId === `retrying_${failedTask.taskId}`) {
                     return { ...t, status: 'failure', error: msg };
                 }
                 return t;
@@ -2439,7 +2448,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
                          try {
                              const modelSpecificQuestions = prepareQuestionsForConfig(config);
                              
-                             const response = await axios.post('http://127.0.0.1:8000/api/score/analyze', {
+                             const response = await axios.post('/api/score/analyze', {
                                 score_data: groupData, // Only this group's data
                                 question_data: modelSpecificQuestions,
                                 mode: mode,
@@ -2483,7 +2492,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
                 const analysisPromises = modelConfigs.map(async (config) => {
                     const modelSpecificQuestions = prepareQuestionsForConfig(config);
                     
-                    const response = await axios.post('http://127.0.0.1:8000/api/score/analyze', {
+                    const response = await axios.post('/api/score/analyze', {
                         score_data: scoreData,
                         question_data: modelSpecificQuestions,
                         mode: mode,
@@ -2549,7 +2558,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
                 .map(t => t.taskId);
                 
             // Always call stop to purge backend queue, even if no tasks are tracked as running
-            await axios.post('http://127.0.0.1:8000/api/tasks/stop', runningTaskIds);
+            await axios.post('/api/tasks/stop', runningTaskIds);
         } catch (error) {
             console.error("Failed to stop analysis", error);
             // alert("停止分析失败，请重试"); // Suppress alert for better UX on stop
@@ -2573,12 +2582,12 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
                 const task = updatedTasks[i];
                 if (task.status === 'success' || task.status === 'failure') continue;
                 
-                // Skip tasks that are still being prepared (temporary IDs)
-                if (task.taskId && task.taskId.startsWith('preparing_')) continue;
+                // Skip tasks that are still being prepared or retried
+                if (task.taskId && (task.taskId.startsWith('preparing_') || task.taskId.startsWith('retrying_'))) continue;
 
 
                 try {
-                    const res = await axios.get(`http://127.0.0.1:8000/api/tasks/${task.taskId}`);
+                    const res = await axios.get(`/api/tasks/${task.taskId}`);
                     const status = res.data.status; // PENDING, PROCESSING, SUCCESS, FAILURE
                     
                     if (status === 'SUCCESS') {
@@ -3250,7 +3259,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
             // Loop for countPerItem
             for (let i = 0; i < countPerItem; i++) {
                 try {
-                    const response = await axios.post('http://127.0.0.1:8000/api/score/variant/generate', {
+                    const response = await axios.post('/api/score/variant/generate', {
                         question_content: question.content,
                         topic: topic,
                         abilities: abilities,
@@ -3385,7 +3394,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
         setVariantError(null);
 
         try {
-            const response = await axios.post('http://127.0.0.1:8000/api/score/variant/generate', {
+            const response = await axios.post('/api/score/variant/generate', {
                 question_content: question.content,
                 topic: topic,
                 abilities: abilities,

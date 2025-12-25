@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import os
+import sys
 import uuid
 import asyncio
 from typing import Dict, Any, List
@@ -20,12 +21,19 @@ logger = logging.getLogger(__name__)
 async def run_score_analysis_background(task_id: str, score_data: Any, question_data: Any, mode: str, config: Any, group_name: str = None):
     """在后台线程池中运行成绩分析任务"""
     try:
+        if task_id not in MEMORY_TASKS:
+            logger.warning(f"Task {task_id} no longer in MEMORY_TASKS, skipping update.")
+            return
         MEMORY_TASKS[task_id]["status"] = "PROCESSING"
         
         # 核心：使用线程池运行同步分析逻辑
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(executor, perform_score_analysis_sync, score_data, question_data, mode, config)
         
+        if task_id not in MEMORY_TASKS:
+            logger.warning(f"Task {task_id} no longer in MEMORY_TASKS, skipping update.")
+            return
+            
         # 如果是班级模式的分组分析，提取对应的结果
         if mode == 'class' and group_name and isinstance(result, dict) and group_name in result:
             result = result[group_name]
@@ -34,8 +42,9 @@ async def run_score_analysis_background(task_id: str, score_data: Any, question_
         MEMORY_TASKS[task_id]["result"] = result
     except Exception as e:
         logger.error(f"Score analysis background task failed: {e}")
-        MEMORY_TASKS[task_id]["status"] = "FAILURE"
-        MEMORY_TASKS[task_id]["error"] = str(e)
+        if task_id in MEMORY_TASKS:
+            MEMORY_TASKS[task_id]["status"] = "FAILURE"
+            MEMORY_TASKS[task_id]["error"] = str(e)
 
 class VariantRequest(BaseModel):
     question_content: str
@@ -697,7 +706,11 @@ async def analyze_score(request: ScoreAnalysisRequest, background_tasks: Backgro
     q_context_list = format_question_data(question_data)
     
     tasks_response = []
-    use_fallback = os.environ.get("RUNNING_DESKTOP") == "true"
+    # Force fallback if running in Desktop mode or frozen executable
+    use_fallback = os.environ.get("RUNNING_DESKTOP") == "true" or getattr(sys, 'frozen', False)
+    
+    if use_fallback:
+        logger.info("Desktop mode detected in Score Analysis: Using in-memory BackgroundTasks.")
     
     try:
         if mode == 'class':

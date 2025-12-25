@@ -91,3 +91,15 @@ async def startup_event():
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
     logger.info(f"Starting up {settings.PROJECT_NAME}...")
+
+    # Automatically open browser in desktop mode or frozen executable
+    if os.environ.get("RUNNING_DESKTOP") == "true" or getattr(sys, 'frozen', False):
+        import webbrowser
+        from threading import Timer
+
+        def open_browser():
+            # Wait a short moment to ensure server is fully ready
+            webbrowser.open("http://127.0.0.1:8000")
+        
+        logger.info("Desktop mode detected: Scheduling browser auto-open...")
+        Timer(1.5, open_browser).start()
