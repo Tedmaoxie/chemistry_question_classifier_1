@@ -8,6 +8,8 @@ from backend.celery_app import celery_app
 import uuid
 import logging
 import os
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +17,10 @@ router = APIRouter()
 
 # In-memory task store for fallback (when Redis/Celery is unavailable)
 MEMORY_TASKS = {}
+
+# 全局线程池，用于在桌面模式下执行耗时的同步大模型调用，避免阻塞 FastAPI 主循环
+# Global thread pool for executing time-consuming sync LLM calls in desktop mode
+executor = ThreadPoolExecutor(max_workers=4)
 
 class ModelConfig(BaseModel):
     provider: str
@@ -38,8 +44,10 @@ async def run_analysis_background(task_id: str, question_data: Dict[str, Any], c
     """Background task wrapper for synchronous analysis (Legacy)"""
     try:
         MEMORY_TASKS[task_id]["status"] = "PROCESSING"
-        # Convert Pydantic models to dicts if needed, or perform_analysis_sync handles dicts
-        result = perform_analysis_sync(question_data, configs)
+        # 使用线程池运行同步代码
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(executor, perform_analysis_sync, question_data, configs)
+        
         MEMORY_TASKS[task_id]["status"] = "SUCCESS"
         MEMORY_TASKS[task_id]["result"] = result
     except Exception as e:
@@ -51,7 +59,10 @@ async def run_single_model_background(task_id: str, question_data: Dict[str, Any
     """Background task wrapper for synchronous single model analysis"""
     try:
         MEMORY_TASKS[task_id]["status"] = "PROCESSING"
-        result = perform_single_model_analysis(question_data, config)
+        # 使用线程池运行同步代码，防止阻塞主循环，从而允许前端轮询请求得到响应
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(executor, perform_single_model_analysis, question_data, config)
+        
         MEMORY_TASKS[task_id]["status"] = "SUCCESS"
         MEMORY_TASKS[task_id]["result"] = result
     except Exception as e:

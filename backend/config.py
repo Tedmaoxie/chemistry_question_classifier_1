@@ -1,4 +1,5 @@
 import os
+import sys
 
 class Settings:
     PROJECT_NAME: str = "Chemistry Question Classifier"
@@ -8,7 +9,15 @@ class Settings:
     ALLOWED_ORIGINS: list = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"]
     
     # File Upload Settings
-    UPLOAD_DIR: str = os.path.join(os.getcwd(), "uploads")
+    # Determine BASE_DIR based on whether the app is frozen
+    if getattr(sys, 'frozen', False):
+        # In PyInstaller, sys.executable is the path to the exe
+        BASE_DIR: str = os.path.dirname(sys.executable)
+    else:
+        # Normal python execution
+        BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+    UPLOAD_DIR: str = os.path.join(BASE_DIR, "uploads")
     MAX_UPLOAD_SIZE: int = 100 * 1024 * 1024  # 100MB
     
     # Redis & Celery Settings
@@ -17,11 +26,14 @@ class Settings:
     CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/0")
 
     # History Settings
-    HISTORY_DIR: str = os.path.join(os.getcwd(), "data", "history")
+    HISTORY_DIR: str = os.path.join(BASE_DIR, "data", "history")
     GIT_TARGET_BRANCH: str = os.getenv("GIT_TARGET_BRANCH", "main")
 
 settings = Settings()
 
 # Ensure directories exist
-os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-os.makedirs(settings.HISTORY_DIR, exist_ok=True)
+try:
+    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    os.makedirs(settings.HISTORY_DIR, exist_ok=True)
+except Exception as e:
+    print(f"Warning: Could not create directories: {e}")

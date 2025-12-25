@@ -13,3 +13,4 @@ passlib[bcrypt]==1.7.4
 openai>=1.55.0
 pandas>=2.0.0
 json_repair>=0.1.0
+python-dotenv==1.0.0

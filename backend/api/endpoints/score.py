@@ -3,15 +3,39 @@ import io
 import json
 import logging
 import re
+import os
+import uuid
+import asyncio
 from typing import Dict, Any, List
-from fastapi import APIRouter, File, UploadFile, HTTPException, Form
+from fastapi import APIRouter, File, UploadFile, HTTPException, Form, BackgroundTasks
 from pydantic import BaseModel
 from backend.services.llm import LLMService
-from backend.tasks.score import analyze_score_task
-from backend.api.endpoints.analysis import ModelConfig
+from backend.tasks.score import analyze_score_task, perform_score_analysis_sync
+from backend.api.endpoints.analysis import ModelConfig, MEMORY_TASKS, executor
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# --- Helper for Desktop Mode ---
+async def run_score_analysis_background(task_id: str, score_data: Any, question_data: Any, mode: str, config: Any, group_name: str = None):
+    """在后台线程池中运行成绩分析任务"""
+    try:
+        MEMORY_TASKS[task_id]["status"] = "PROCESSING"
+        
+        # 核心：使用线程池运行同步分析逻辑
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(executor, perform_score_analysis_sync, score_data, question_data, mode, config)
+        
+        # 如果是班级模式的分组分析，提取对应的结果
+        if mode == 'class' and group_name and isinstance(result, dict) and group_name in result:
+            result = result[group_name]
+            
+        MEMORY_TASKS[task_id]["status"] = "SUCCESS"
+        MEMORY_TASKS[task_id]["result"] = result
+    except Exception as e:
+        logger.error(f"Score analysis background task failed: {e}")
+        MEMORY_TASKS[task_id]["status"] = "FAILURE"
+        MEMORY_TASKS[task_id]["error"] = str(e)
 
 class VariantRequest(BaseModel):
     question_content: str
@@ -657,7 +681,7 @@ def upload_score_data(
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
 
 @router.post("/score/analyze")
-async def analyze_score(request: ScoreAnalysisRequest):
+async def analyze_score(request: ScoreAnalysisRequest, background_tasks: BackgroundTasks):
     """
     Start analysis for score data.
     """
@@ -673,34 +697,60 @@ async def analyze_score(request: ScoreAnalysisRequest):
     q_context_list = format_question_data(question_data)
     
     tasks_response = []
+    use_fallback = os.environ.get("RUNNING_DESKTOP") == "true"
     
     try:
         if mode == 'class':
-            # Collective Analysis
-            # Dispatch Task with structured data
-            task = analyze_score_task.delay(score_data, q_context_list, mode, config)
+            # --- 优化：将班级分析按组拆分，实现实时结果显示 ---
+            # 识别分组（年级/班级）
+            first_row = score_data[0] if score_data else {}
+            exclude_keys = ['question_id', 'full_score', 'average_score', 'id', 'score_rate', 'group_name']
+            potential_groups = [k for k in first_row.keys() if k not in exclude_keys and not k.startswith('_')]
             
-            tasks_response.append({
-                "id": "class_analysis",
-                "task_id": task.id
-            })
+            # 如果没有明确分组，至少分析总得分率 (score_rate)
+            if not potential_groups and 'score_rate' in first_row:
+                potential_groups = ['score_rate']
+            
+            if not potential_groups:
+                # 最后的保底：如果什么都没找到，就整体分析
+                potential_groups = ['Overall']
+
+            for g_name in potential_groups:
+                # 准备该组的得分数据
+                group_score_data = []
+                for item in score_data:
+                    # 这里的逻辑需要和 perform_score_analysis_sync 保持一致
+                    group_score_data.append({
+                        "question_id": item.get("question_id"),
+                        "score_rate": item.get(g_name) if g_name in item else item.get("score_rate"),
+                        "group_name": g_name
+                    })
+                
+                if not group_score_data: continue
+
+                if use_fallback:
+                    task_id = f"score_class_{uuid.uuid4()}"
+                    MEMORY_TASKS[task_id] = {"status": "PENDING"}
+                    background_tasks.add_task(run_score_analysis_background, task_id, group_score_data, q_context_list, mode, config, g_name)
+                    tasks_response.append({"id": g_name, "task_id": task_id})
+                else:
+                    # 服务器模式：使用 Celery
+                    task = analyze_score_task.delay(group_score_data, q_context_list, mode, config)
+                    tasks_response.append({"id": g_name, "task_id": task.id})
             
         elif mode == 'student':
-            # Individual Analysis: One task per student row
+            # 个人模式：每个学生是一个独立任务
             for idx, row in enumerate(score_data):
-                # Identify Student
-                student_id = row.get("student_id") or row.get("学号") or row.get("姓名") or f"Student_{idx+1}"
+                student_id = row.get("student_id") or row.get("姓名") or f"Student_{idx+1}"
                 
-                # Dispatch Task with single row score data (as list or dict? task expects score_data)
-                # Task expects score_data to be consistent. 
-                # If class mode: List[Dict]. If student mode: Dict (single student).
-                
-                task = analyze_score_task.delay(row, q_context_list, mode, config)
-                
-                tasks_response.append({
-                    "id": str(student_id),
-                    "task_id": task.id
-                })
+                if use_fallback:
+                    task_id = f"score_student_{uuid.uuid4()}"
+                    MEMORY_TASKS[task_id] = {"status": "PENDING"}
+                    background_tasks.add_task(run_score_analysis_background, task_id, row, q_context_list, mode, config)
+                    tasks_response.append({"id": str(student_id), "task_id": task_id})
+                else:
+                    task = analyze_score_task.delay(row, q_context_list, mode, config)
+                    tasks_response.append({"id": str(student_id), "task_id": task.id})
                 
         return {"tasks": tasks_response, "message": f"Started {len(tasks_response)} analysis tasks"}
         

@@ -29,20 +29,20 @@ def _git_sync(commit_msg: str):
     """
     try:
         # Check if git is initialized
-        if not os.path.exists(os.path.join(os.getcwd(), ".git")):
+        if not os.path.exists(os.path.join(settings.BASE_DIR, ".git")):
             print("Git not initialized, skipping sync.")
             return
 
         # Add all files in history directory
-        subprocess.run(["git", "add", settings.HISTORY_DIR], cwd=os.getcwd(), check=True, capture_output=True)
+        subprocess.run(["git", "add", settings.HISTORY_DIR], cwd=settings.BASE_DIR, check=True, capture_output=True)
         
         # Commit
-        subprocess.run(["git", "commit", "-m", commit_msg], cwd=os.getcwd(), check=False, capture_output=True)
+        subprocess.run(["git", "commit", "-m", commit_msg], cwd=settings.BASE_DIR, check=False, capture_output=True)
         
         # Push (This might fail if no remote is configured or no auth, which is expected in some local envs)
         # We only try to push if we are not in a detached HEAD state or if we are on the target branch
         # For now, we attempt push and log error if it fails
-        subprocess.run(["git", "push", "origin", settings.GIT_TARGET_BRANCH], cwd=os.getcwd(), check=True, capture_output=True)
+        subprocess.run(["git", "push", "origin", settings.GIT_TARGET_BRANCH], cwd=settings.BASE_DIR, check=True, capture_output=True)
         print(f"Successfully synced history to {settings.GIT_TARGET_BRANCH}")
     except subprocess.CalledProcessError as e:
         print(f"Git sync failed: {e}")

@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 import os
 import sys
+import traceback
 
 # Debug: Print sys.path to understand import environment
 print(f"DEBUG: sys.path: {sys.path}")
@@ -37,20 +38,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
+    )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    error_msg = f"Global Exception: {str(exc)}\n{traceback.format_exc()}"
+    print(error_msg)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "message": str(exc)},
+    )
+
 # Include API Router
 app.include_router(api_router, prefix=settings.API_PREFIX)
 
 # Serve Frontend Static Files
-# Mount /assets to frontend/dist/assets
-# Ensure the path is correct relative to where uvicorn is run or executable location
-if getattr(sys, 'frozen', False):
-    # Running as PyInstaller bundle
-    base_dir = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
-else:
-    # Running as script
-    base_dir = os.getcwd()
-
-frontend_dist_path = os.path.join(base_dir, "frontend", "dist")
+# Use BASE_DIR from settings which is aware of frozen state
+frontend_dist_path = os.path.join(settings.BASE_DIR, "frontend", "dist")
 
 if os.path.exists(frontend_dist_path):
     app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist_path, "assets")), name="assets")

@@ -347,6 +347,51 @@ function App() {
   const [taskIds, setTaskIds] = useState<string[]>([]); // 当前任务ID列表
   const [highlightedId, setHighlightedId] = useState<string | null>(null); // 高亮显示的分析结果ID
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({}); // 全局折叠状态管理
+
+  const [analysisStartTime, setAnalysisStartTime] = useState<number | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const [avgTimePerTask, setAvgTimePerTask] = useState<number>(0);
+
+  // Update 'now' every second to refresh timer
+  useEffect(() => {
+      if (!analyzing) return;
+      const timer = setInterval(() => setNow(Date.now()), 1000);
+      return () => clearInterval(timer);
+  }, [analyzing]);
+
+  // Update average time per task when a task completes
+  useEffect(() => {
+      if (progress.completed > 0 && analysisStartTime) {
+          // Use current time as the "completion time" for the latest batch
+          // Note: This is an approximation. Ideally we'd use the timestamp of the last completion event.
+          const elapsed = (Date.now() - analysisStartTime) / 1000;
+          setAvgTimePerTask(elapsed / progress.completed);
+      } else if (progress.completed === 0) {
+          setAvgTimePerTask(0);
+      }
+  }, [progress.completed, analysisStartTime]);
+
+  // Estimate remaining time
+  const estimatedTimeRemaining = React.useMemo(() => {
+      if (!analyzing || !analysisStartTime) return null;
+      if (progress.completed === progress.total && progress.total > 0) return null;
+      
+      // Show "Calculating..." if no tasks are completed yet
+      if (progress.completed === 0 || avgTimePerTask === 0) {
+          return "计算中...";
+      }
+      
+      // Calculate total expected duration based on fixed average time
+      const totalExpectedDuration = avgTimePerTask * progress.total;
+      const elapsedTotal = (now - analysisStartTime) / 1000;
+      
+      // Remaining time = Total Expected - Elapsed
+      // This ensures the countdown decreases as 'now' increases
+      const remainingSeconds = Math.max(0, Math.round(totalExpectedDuration - elapsedTotal));
+      
+      if (remainingSeconds < 60) return `${remainingSeconds}秒`;
+      return `${Math.ceil(remainingSeconds / 60)}分钟`;
+  }, [progress.total, progress.completed, analyzing, analysisStartTime, now, avgTimePerTask]);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(''); // PDF导出状态
   const questionListRef = useRef<HTMLDivElement>(null); // 题目列表容器引用
@@ -759,51 +804,6 @@ function App() {
           setAnalyzing(false);
       }
   };
-
-  const [analysisStartTime, setAnalysisStartTime] = useState<number | null>(null);
-  const [now, setNow] = useState(Date.now());
-  const [avgTimePerTask, setAvgTimePerTask] = useState<number>(0);
-
-  // Update 'now' every second to refresh timer
-  useEffect(() => {
-      if (!analyzing) return;
-      const timer = setInterval(() => setNow(Date.now()), 1000);
-      return () => clearInterval(timer);
-  }, [analyzing]);
-
-  // Update average time per task when a task completes
-  useEffect(() => {
-      if (progress.completed > 0 && analysisStartTime) {
-          // Use current time as the "completion time" for the latest batch
-          // Note: This is an approximation. Ideally we'd use the timestamp of the last completion event.
-          const elapsed = (Date.now() - analysisStartTime) / 1000;
-          setAvgTimePerTask(elapsed / progress.completed);
-      } else if (progress.completed === 0) {
-          setAvgTimePerTask(0);
-      }
-  }, [progress.completed, analysisStartTime]);
-
-  // Estimate remaining time
-    const estimatedTimeRemaining = React.useMemo(() => {
-        if (!analyzing || !analysisStartTime) return null;
-        if (progress.completed === progress.total && progress.total > 0) return null;
-        
-        // Show "Calculating..." if no tasks are completed yet
-        if (progress.completed === 0 || avgTimePerTask === 0) {
-            return "计算中...";
-        }
-        
-        // Calculate total expected duration based on fixed average time
-        const totalExpectedDuration = avgTimePerTask * progress.total;
-        const elapsedTotal = (now - analysisStartTime) / 1000;
-        
-        // Remaining time = Total Expected - Elapsed
-        // This ensures the countdown decreases as 'now' increases
-        const remainingSeconds = Math.max(0, Math.round(totalExpectedDuration - elapsedTotal));
-        
-        if (remainingSeconds < 60) return `${remainingSeconds}秒`;
-        return `${Math.ceil(remainingSeconds / 60)}分钟`;
-    }, [progress.total, progress.completed, analyzing, analysisStartTime, now, avgTimePerTask]);
 
     // --- 辅助功能：轮询任务结果 ---
     const pollTasks = async (pendingTasks: { qId: string, model: string, taskId: string }[]) => {

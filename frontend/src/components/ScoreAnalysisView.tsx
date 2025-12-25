@@ -176,8 +176,6 @@ const FormatInstruction = ({ mode }: { mode: 'class' | 'student' }) => {
 const MemoizedEditableCell = React.memo(({ 
     value, 
     onCommit, 
-    align = 'left',
-    type = 'text',
     disabled = false
 }: { 
     value: string | number, 
@@ -2805,7 +2803,7 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
             const avgs: Record<string, number> = {};
             const groupRows = scoreData.filter(row => row.group_name === groupName);
             
-            groupRows.forEach((row, idx) => {
+            groupRows.forEach((row) => {
                 // Ensure consistent Q-ID
                 const qId = row.question_id || row['题号'] || row.id;
                 // If using System QID (Q1, Q2...), we might need to map it if the raw data doesn't use it.
@@ -3132,10 +3130,11 @@ export const ScoreAnalysisView: React.FC<ScoreAnalysisViewProps> = ({ questions:
             } catch (e) { console.error("Report capture failed", e); }
         }
         setExportProgressText('3/3');
-        await new Promise(resolve => setTimeout(resolve, 500)); // Show 3/3 for a moment
+        await new Promise(resolve => setTimeout(resolve, 800)); // Show 3/3 for a moment
 
         pdf.save(`${title}.pdf`);
         setExporting(false);
+        setExportProgressText('');
     };
 
     const handleDownloadRemedialMD = () => {
