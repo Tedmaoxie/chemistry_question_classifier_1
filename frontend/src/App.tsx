@@ -54,7 +54,8 @@ const ModelResultAccordion = React.memo(({
     onRetry,
     questionId,
     expanded: expandedProp,
-    onExpandedChange
+    onExpandedChange,
+    disableAutoExpand = false
 }: { 
     modelLabel: string, 
     displayName: string, 
@@ -65,7 +66,8 @@ const ModelResultAccordion = React.memo(({
     onRetry?: (questionId: string, modelLabel: string) => void,
     questionId: string,
     expanded?: boolean,
-    onExpandedChange?: (id: string, isExpanded: boolean) => void
+    onExpandedChange?: (id: string, isExpanded: boolean) => void,
+    disableAutoExpand?: boolean
 }) => {
     const [localExpanded, setLocalExpanded] = useState(false);
     const isControlled = expandedProp !== undefined;
@@ -76,6 +78,8 @@ const ModelResultAccordion = React.memo(({
     const [downloading, setDownloading] = useState(false);
 
     useEffect(() => {
+        if (disableAutoExpand) return; // 导出时禁用自动展开，防止无限更新循环
+
         const status = statusInfo?.status;
         // 状态从未完成变为处理中或完成时，自动展开
         if (status !== prevStatus.current) {
@@ -88,10 +92,12 @@ const ModelResultAccordion = React.memo(({
             }
             prevStatus.current = status;
         }
-    }, [statusInfo?.status, expanded, isControlled, onExpandedChange, id]);
+    }, [statusInfo?.status, expanded, isControlled, onExpandedChange, id, disableAutoExpand]);
 
     // 如果被高亮，自动展开
     useEffect(() => {
+        if (disableAutoExpand) return; // 导出时禁用自动展开
+
         if (highlighted && !expanded) {
             if (isControlled) {
                 onExpandedChange?.(id, true);
@@ -99,7 +105,7 @@ const ModelResultAccordion = React.memo(({
                 setLocalExpanded(true);
             }
         }
-    }, [highlighted, expanded, isControlled, onExpandedChange, id]);
+    }, [highlighted, expanded, isControlled, onExpandedChange, id, disableAutoExpand]);
 
     const handleChange = (_event: React.SyntheticEvent, isExpanded: boolean) => {
         if (isControlled) {
@@ -157,14 +163,19 @@ const ModelResultAccordion = React.memo(({
         setDownloading(true);
         try {
             const canvas = await html2canvas(reportRef.current, {
-                scale: 2,
+                scale: 1.5, // 降低一点 Scale
                 useCORS: true,
                 logging: false,
                 backgroundColor: '#ffffff',
                 ignoreElements: (element) => element.classList.contains('no-print')
             });
-            const imgData = canvas.toDataURL('image/png');
-            const pdf = new jsPDF('p', 'mm', 'a4');
+            const imgData = canvas.toDataURL('image/jpeg', 0.8); // 使用 JPEG 压缩
+            const pdf = new jsPDF({
+                orientation: 'p',
+                unit: 'mm',
+                format: 'a4',
+                compress: true // 开启 PDF 内部压缩
+            });
             const pdfWidth = pdf.internal.pageSize.getWidth();
             const pdfHeight = pdf.internal.pageSize.getHeight();
             const imgWidth = pdfWidth;
@@ -174,10 +185,10 @@ const ModelResultAccordion = React.memo(({
             let position = 0;
 
             if (heightLeft <= pdfHeight) {
-                pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+                pdf.addImage(imgData, 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST');
             } else {
                 while (heightLeft > 0) {
-                    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+                    pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
                     heightLeft -= pdfHeight;
                     position -= pdfHeight;
                     if (heightLeft > 0) {
@@ -1122,7 +1133,12 @@ function App() {
               questionListRef.current.style.overflowY = 'visible';
           }
 
-          const pdf = new jsPDF('p', 'mm', 'a4');
+          const pdf = new jsPDF({
+              orientation: 'p',
+              unit: 'mm',
+              format: 'a4',
+              compress: true
+          });
           const pdfWidth = pdf.internal.pageSize.getWidth();
           const pdfHeight = pdf.internal.pageSize.getHeight();
           let cursorY = 0;
@@ -1158,13 +1174,13 @@ function App() {
                       await new Promise(resolve => setTimeout(resolve, 50));
 
                       const canvas = await html2canvas(element, {
-                          scale: 1.5, // 降低一点 Scale 提升速度，默认是 2
+                          scale: 1.2, // 进一步降低 Scale 提升性能和减少内存占用
                           useCORS: true,
                           logging: false,
                           backgroundColor: '#ffffff'
                       });
 
-                      const imgData = canvas.toDataURL('image/png');
+                      const imgData = canvas.toDataURL('image/jpeg', 0.75); // 使用 JPEG 压缩并设置 75% 质量
                       const imgWidth = pdfWidth - 2 * margin;
                       const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
@@ -1176,7 +1192,7 @@ function App() {
                           cursorY = margin;
                       }
 
-                      pdf.addImage(imgData, 'PNG', margin, cursorY, imgWidth, imgHeight);
+                      pdf.addImage(imgData, 'JPEG', margin, cursorY, imgWidth, imgHeight, undefined, 'FAST');
                       cursorY += imgHeight + 5;
                   }
               }
@@ -1286,7 +1302,7 @@ function App() {
       <Container maxWidth="xl">
         <Box sx={{ my: 4 }}>
           <Typography variant="h4" component="h1" gutterBottom align="center" sx={{ fontWeight: 'bold', color: 'primary.main', mb: 1 }}>
-            高中化学试题深度标定与学情诊断系统（网页版）
+            高中化学试题深度标定与学情诊断系统（本地版）
           </Typography>
           <Typography variant="subtitle1" align="center" color="text.secondary" sx={{ mb: 4 }}>
             基于 DeepSeek / 豆包 / 通义千问 / Kimi / 智谱等多模型协同分析
@@ -1705,7 +1721,8 @@ function App() {
                                                     questionId={q.id}
                                                     expanded={expandedAccordions[elementId]}
                                                     onExpandedChange={handleAccordionChange}
-                                                />
+                                                    disableAutoExpand={isExporting}
+                                                  />
                                               );
                                           })}
                                       </Box>
