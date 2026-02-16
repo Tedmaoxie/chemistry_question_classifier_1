@@ -1302,7 +1302,7 @@ function App() {
       <Container maxWidth="xl">
         <Box sx={{ my: 4 }}>
           <Typography variant="h4" component="h1" gutterBottom align="center" sx={{ fontWeight: 'bold', color: 'primary.main', mb: 1 }}>
-            高中化学试题深度标定与学情诊断系统（本地版）
+            高中化学试题深度标定与学情诊断系统（网页版）
           </Typography>
           <Typography variant="subtitle1" align="center" color="text.secondary" sx={{ mb: 4 }}>
             基于 DeepSeek / 豆包 / 通义千问 / Kimi / 智谱等多模型协同分析
